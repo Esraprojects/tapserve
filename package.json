@@ -1,0 +1,19 @@
+{
+  "name": "tapserve",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --filter @tapserve/web dev",
+    "build": "pnpm --filter @tapserve/web build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "db:migrate": "pnpm --filter @tapserve/db migrate",
+    "db:seed": "pnpm --filter @tapserve/db seed"
+  },
+  "devDependencies": {
+    "@tapserve/db": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

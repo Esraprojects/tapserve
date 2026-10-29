@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-800 dark:bg-stone-900;
+  }
+  .label {
+    @apply mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300;
+  }
+  .input {
+    @apply block w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-base outline-none
+      focus:border-brand-500 focus:ring-2 focus:ring-brand-100 dark:border-stone-700 dark:bg-stone-950
+      dark:focus:ring-brand-700;
+  }
+  .btn {
+    @apply inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-brand-600 px-5 text-base
+      font-semibold text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500
+      focus:ring-offset-2 dark:focus:ring-offset-stone-950;
+  }
+  .btn-secondary {
+    @apply inline-flex min-h-12 items-center justify-center rounded-xl border border-stone-300 px-5 text-base
+      font-medium hover:bg-stone-100 dark:border-stone-700 dark:hover:bg-stone-800;
+  }
+  .hint {
+    @apply mt-1 text-sm text-stone-500 dark:text-stone-400;
+  }
+}
