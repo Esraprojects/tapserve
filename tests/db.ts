@@ -2,7 +2,8 @@ import { createSql, migrate, type Sql } from "@tapserve/db";
 
 export const ADMIN_URL =
   process.env.TEST_DATABASE_ADMIN_URL ?? "postgres://postgres:postgres@localhost:5432/tapserve_test";
-const APP_PASSWORD = "tapserve_app_test";
+// Roles are cluster-wide, so reuse the dev password when set to avoid breaking a local dev database.
+const APP_PASSWORD = process.env.APP_DB_PASSWORD ?? "tapserve_app_test";
 
 /** Rebuild the test database from scratch and return an admin and an app (RLS-restricted) connection. */
 export async function freshDatabase(): Promise<{ admin: Sql; app: Sql }> {

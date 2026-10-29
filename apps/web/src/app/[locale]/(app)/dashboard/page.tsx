@@ -1,0 +1,116 @@
+import Link from "next/link";
+import { liveStatus, salesReport } from "@tapserve/db";
+import { format } from "@tapserve/i18n";
+import { BarList, ColumnChart } from "@/components/charts";
+import { FormError } from "@/components/FormError";
+import { addDays, addisToday, bothCalendars, shortDay } from "@/lib/dates";
+import { param, resolveLocale, type LocaleParams } from "@/lib/locale";
+import { money, pick } from "@/lib/text";
+import { db } from "@/server/db";
+import { appContext } from "@/server/context";
+
+type Search = Promise<Record<string, string | string[] | undefined>>;
+
+export default async function DashboardPage({ params, searchParams }: { params: LocaleParams; searchParams: Search }) {
+  const { locale, t } = await resolveLocale(params);
+  const search = await searchParams;
+  const { session, access, actor, branchId, can } = await appContext(locale);
+  const today = addisToday();
+  const name = session.user.full_name || session.user.phone || session.user.email || "";
+  const roleName = (t.roles as Record<string, string>)[access.roleName] ?? access.roleName;
+  const live = await liveStatus(db(), actor, branchId);
+  const canReports = can("reports.view");
+  const [day, week] = canReports
+    ? await Promise.all([
+        salesReport(db(), actor, { from: today, to: today }, branchId),
+        salesReport(db(), actor, { from: addDays(today, -6), to: today }, branchId),
+      ])
+    : [null, null];
+  const fmt = (v: number) => money(locale, v);
+
+  const tiles = [
+    canReports && { label: t.dashboard.salesToday, value: fmt(day!.totals.gross_santim), hero: true },
+    canReports && { label: t.reports.bills, value: String(day!.totals.bills) },
+    canReports && { label: t.reports.averageBill, value: fmt(day!.totals.average_bill_santim) },
+    { label: t.dashboard.openTables, value: `${live.occupiedTables} / ${live.totalTables}` },
+    { label: t.dashboard.orders, value: String(live.openOrders) },
+  ].filter(Boolean) as { label: string; value: string; hero?: boolean }[];
+
+  return (
+    <main className="mx-auto max-w-6xl px-4 py-6">
+      <header className="mb-6">
+        <p className="text-sm text-stone-500">{access.tenantName} · {roleName}</p>
+        <h1 className="text-2xl font-bold">{format(t.dashboard.welcome, { name })}</h1>
+        <p className="mt-1 text-sm text-stone-500">{t.common.today}: {bothCalendars(today, locale)}</p>
+      </header>
+      <FormError t={t} code={param(search.error)} />
+
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        {tiles.map((tile) => (
+          <div key={tile.label} className={`card ${tile.hero ? "col-span-2 lg:col-span-1" : ""}`}>
+            <p className="text-sm text-stone-500">{tile.label}</p>
+            <p className={`mt-2 font-semibold tabular-nums ${tile.hero ? "text-3xl" : "text-2xl"}`}>{tile.value}</p>
+          </div>
+        ))}
+      </section>
+
+      {canReports && week && day && (
+        <div className="mt-6 grid gap-4 lg:grid-cols-3">
+          <section className="card lg:col-span-2">
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="font-semibold">{t.reports.daily} · {t.reports.last7Days}</h2>
+              <Link href={`/${locale}/reports`} className="text-sm text-brand-600">{t.reports.title} →</Link>
+            </div>
+            <ColumnChart
+              label={`${t.reports.daily} · ${t.reports.last7Days}`}
+              data={week.daily.map((d) => ({ label: shortDay(d.day, locale), value: d.gross_santim }))}
+              format={fmt}
+            />
+            <p className="mt-2 text-sm text-stone-500">
+              {t.reports.gross}: <span className="font-semibold tabular-nums text-stone-900 dark:text-stone-100">{fmt(week.totals.gross_santim)}</span>
+              {" · "}{t.reports.net}: <span className="tabular-nums">{fmt(week.totals.net_santim)}</span>
+            </p>
+          </section>
+          <section className="card">
+            <h2 className="mb-3 font-semibold">{t.reports.byMethod} · {t.common.today}</h2>
+            {day.byMethod.length ? (
+              <BarList data={day.byMethod.map((m) => ({ label: pick(locale, m.name_am, m.name_en), value: m.total_santim }))} format={fmt} />
+            ) : <p className="text-sm text-stone-500">{t.reports.noData}</p>}
+          </section>
+          <section className="card lg:col-span-2">
+            <h2 className="mb-3 font-semibold">{t.reports.topItems} · {t.common.today}</h2>
+            {day.topItems.length ? (
+              <table className="w-full text-sm">
+                <thead className="text-left text-stone-500">
+                  <tr><th className="pb-2 font-medium">{t.reports.item}</th><th className="pb-2 text-right font-medium">{t.reports.quantity}</th><th className="pb-2 text-right font-medium">{t.reports.revenue}</th></tr>
+                </thead>
+                <tbody>
+                  {day.topItems.map((i) => (
+                    <tr key={i.name_en + i.name_am} className="border-t border-stone-100 dark:border-stone-800">
+                      <td className="py-2">{pick(locale, i.name_am, i.name_en)}</td>
+                      <td className="py-2 text-right tabular-nums">{i.quantity}</td>
+                      <td className="py-2 text-right tabular-nums">{fmt(i.revenue_santim)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <p className="text-sm text-stone-500">{t.reports.noData}</p>}
+          </section>
+          <section className="card">
+            <h2 className="mb-3 font-semibold">{t.reports.byWaiter} · {t.common.today}</h2>
+            {day.byWaiter.length ? (
+              <BarList data={day.byWaiter.map((w) => ({ label: w.name, value: w.revenue_santim }))} format={fmt} />
+            ) : <p className="text-sm text-stone-500">{t.reports.noData}</p>}
+          </section>
+        </div>
+      )}
+      {canReports && <p className="mt-4 text-sm text-stone-500">{t.reports.profitNote}</p>}
+      {!canReports && (
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link href={`/${locale}/pos`} className="btn sm:w-auto">{t.nav.pos}</Link>
+          <Link href={`/${locale}/tables`} className="btn-secondary">{t.nav.tables}</Link>
+        </div>
+      )}
+    </main>
+  );
+}
