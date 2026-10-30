@@ -1,0 +1,22 @@
+.slip {
+  font-family: ui-monospace, "Noto Sans Ethiopic", monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #000;
+  background: #fff;
+  margin: 0 auto;
+  padding: 8px 0;
+}
+.slip.w80 { width: 72mm; }
+.slip.w58 { width: 48mm; font-size: 11px; }
+.slip .center { text-align: center; }
+.slip .row { display: flex; justify-content: space-between; gap: 6px; }
+.slip .row > :last-child { text-align: right; white-space: nowrap; }
+.slip hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
+.slip .big { font-size: 1.3em; font-weight: 700; }
+.slip .muted { color: #333; font-size: 0.9em; }
+@media print {
+  @page { margin: 0; }
+  body { background: #fff !important; }
+  .no-print { display: none !important; }
+}

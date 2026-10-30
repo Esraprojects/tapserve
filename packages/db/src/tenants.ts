@@ -1,5 +1,6 @@
-import { DEFAULT_ROLE_PERMISSIONS, type SystemRole } from "@tapserve/core";
+import { DEFAULT_ROLE_PERMISSIONS, normalizeEthiopianPhone, type SystemRole } from "@tapserve/core";
 import { type Sql, withTenant, withUser } from "./client";
+import { DomainError } from "./restaurant/common";
 
 export const BUSINESS_TYPES = ["restaurant", "cafe", "bar", "hotel", "hotel_restaurant"] as const;
 export type BusinessType = (typeof BUSINESS_TYPES)[number];
@@ -21,6 +22,7 @@ export async function onboardBusiness(sql: Sql, userId: string, input: OnboardIn
       select onboard_business(${input.name.trim()}, ${input.businessType}, ${input.city.trim()},
         ${input.subCity.trim()}, ${input.tin?.trim() || null}, ${input.branchName.trim()}, ${input.locale}) as id`;
     const tenantId = row!.id;
+    await tx`select seed_payment_methods(${tenantId})`;
     // onboard_business set app.tenant_id for this transaction, so these rows pass RLS.
     const roles = await tx<{ id: string; name: SystemRole }[]>`select id, name from roles`;
     const grants = roles.flatMap((r) =>
@@ -109,4 +111,86 @@ export async function saveTaxSettings(sql: Sql, ctx: { tenantId: string; userId:
 
 export async function completeOnboarding(sql: Sql, ctx: { tenantId: string; userId: string }) {
   await withTenant(sql, ctx, (tx) => tx`update tenants set onboarding_completed_at = now() where id = current_tenant_id() and onboarding_completed_at is null`);
+}
+
+export interface StaffMember {
+  membership_id: string;
+  user_id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  role_name: string;
+  status: "active" | "disabled";
+}
+
+export async function listStaff(sql: Sql, ctx: { tenantId: string; userId: string }): Promise<StaffMember[]> {
+  return withTenant(sql, ctx, (tx) => tx<StaffMember[]>`
+    select m.id as membership_id, u.id as user_id, u.full_name, u.phone, u.email, r.name as role_name, m.status
+    from memberships m join users u on u.id = m.user_id join roles r on r.id = m.role_id
+    order by r.name = 'Owner' desc, u.full_name`);
+}
+
+/**
+ * Add a staff member by Ethiopian phone number. They log in with a one-time code sent to that phone.
+ * Needs staff.manage. Only an Owner can add another Owner.
+ */
+export async function addStaffMember(
+  sql: Sql,
+  ctx: { tenantId: string; userId: string; permissions: readonly string[] },
+  input: { phone: string; fullName: string; roleName: string },
+): Promise<string> {
+  if (!ctx.permissions.includes("staff.manage")) throw new DomainError("forbidden");
+  const phone = normalizeEthiopianPhone(input.phone);
+  if (!phone) throw new DomainError("invalid_phone");
+  return withTenant(sql, ctx, async (tx) => {
+    const [role] = await tx<{ id: string; name: string }[]>`select id, name from roles where name = ${input.roleName}`;
+    if (!role) throw new DomainError("unknown_role");
+    if (role.name === "Owner" && !ctx.permissions.includes("roles.manage")) throw new DomainError("forbidden");
+    const [user] = await tx<{ id: string }[]>`
+      insert into users (phone, full_name) values (${phone}, ${input.fullName.trim()})
+      on conflict (phone) do update set full_name = case when users.full_name = '' then excluded.full_name else users.full_name end
+      returning id`;
+    const [membership] = await tx<{ id: string }[]>`
+      insert into memberships (user_id, role_id) values (${user!.id}, ${role.id})
+      on conflict (tenant_id, user_id) do update set role_id = excluded.role_id, status = 'active'
+      returning id`;
+    await tx`insert into membership_branches (membership_id, branch_id)
+             select ${membership!.id}, id from branches on conflict do nothing`;
+    await tx`insert into audit_logs (action, entity, entity_id, after)
+             values ('staff.add', 'membership', ${membership!.id}, ${tx.json({ phone, role: role.name })})`;
+    return user!.id;
+  });
+}
+
+export async function setStaffStatus(
+  sql: Sql,
+  ctx: { tenantId: string; userId: string; permissions: readonly string[] },
+  membershipId: string,
+  status: "active" | "disabled",
+): Promise<void> {
+  if (!ctx.permissions.includes("staff.manage")) throw new DomainError("forbidden");
+  await withTenant(sql, ctx, async (tx) => {
+    const [target] = await tx`select m.user_id, r.name from memberships m join roles r on r.id = m.role_id where m.id = ${membershipId}`;
+    if (!target) throw new DomainError("not_found");
+    if (target.user_id === ctx.userId || target.name === "Owner") throw new DomainError("forbidden");
+    await tx`update memberships set status = ${status} where id = ${membershipId}`;
+    await tx`insert into audit_logs (action, entity, entity_id, after)
+             values ('staff.status', 'membership', ${membershipId}, ${tx.json({ status })})`;
+  });
+}
+
+export interface BranchView {
+  id: string;
+  name: string;
+}
+
+/** Branches the user may work in (Owners and Managers see all). */
+export async function listBranches(sql: Sql, ctx: { tenantId: string; userId: string }): Promise<BranchView[]> {
+  return withTenant(sql, ctx, (tx) => tx<BranchView[]>`
+    select b.id, b.name from branches b
+    where exists (select 1 from memberships m join roles r on r.id = m.role_id
+                  where m.user_id = ${ctx.userId} and r.name in ('Owner', 'Manager'))
+       or b.id in (select mb.branch_id from membership_branches mb join memberships m on m.id = mb.membership_id
+                   where m.user_id = ${ctx.userId})
+    order by b.created_at`);
 }

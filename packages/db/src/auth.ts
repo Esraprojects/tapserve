@@ -115,21 +115,27 @@ export async function createSession(sql: Sql, userId: string): Promise<string> {
 export interface Session {
   user: User;
   activeTenantId: string | null;
+  activeBranchId: string | null;
 }
 
 export async function getSession(sql: Sql, token: string): Promise<Session | null> {
-  const [row] = await sql<(User & { active_tenant_id: string | null })[]>`
-    select u.id, u.email, u.phone, u.full_name, u.locale, u.calendar_pref, s.active_tenant_id
+  const [row] = await sql<(User & { active_tenant_id: string | null; active_branch_id: string | null })[]>`
+    select u.id, u.email, u.phone, u.full_name, u.locale, u.calendar_pref, s.active_tenant_id, s.active_branch_id
     from sessions s join users u on u.id = s.user_id
     where s.token_hash = ${sha256(token)} and s.expires_at > now()`;
   if (!row) return null;
-  const { active_tenant_id, ...user } = row;
-  return { user, activeTenantId: active_tenant_id };
+  const { active_tenant_id, active_branch_id, ...user } = row;
+  return { user, activeTenantId: active_tenant_id, activeBranchId: active_branch_id };
 }
 
 /** Callers must check membership first (see getTenantAccess). */
 export async function setActiveTenant(sql: Sql, token: string, tenantId: string | null): Promise<void> {
-  await sql`update sessions set active_tenant_id = ${tenantId} where token_hash = ${sha256(token)}`;
+  await sql`update sessions set active_tenant_id = ${tenantId}, active_branch_id = null where token_hash = ${sha256(token)}`;
+}
+
+/** Callers must check the branch belongs to the user (see listBranches). */
+export async function setActiveBranch(sql: Sql, token: string, branchId: string | null): Promise<void> {
+  await sql`update sessions set active_branch_id = ${branchId} where token_hash = ${sha256(token)}`;
 }
 
 export async function deleteSession(sql: Sql, token: string): Promise<void> {
