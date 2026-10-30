@@ -8,6 +8,7 @@ interface Row {
   method: string;
   amount: string;
   reference: string;
+  bookingId: string;
 }
 
 function toSantim(text: string): number {
@@ -21,16 +22,18 @@ function toSantim(text: string): number {
 const birr = (santim: number) => (santim / 100).toFixed(2);
 
 /** Mixed payments (part cash, part Telebirr...) with a cash change calculator. */
-export function PaymentForm({ action, locale, orderId, billId, dueSantim, methods, t }: {
+export function PaymentForm({ action, locale, orderId, billId, dueSantim, methods, guests = [], t }: {
   action: (form: FormData) => Promise<void>;
   locale: "am" | "en";
   orderId: string;
   billId: string;
   dueSantim: number;
   methods: { code: string; name: string; kind: string }[];
+  /** In-house hotel guests a bill can be charged to. */
+  guests?: { bookingId: string; label: string }[];
   t: Dictionary["bill"];
 }) {
-  const [rows, setRows] = useState<Row[]>([{ method: methods[0]?.code ?? "cash", amount: birr(dueSantim), reference: "" }]);
+  const [rows, setRows] = useState<Row[]>([{ method: methods[0]?.code ?? "cash", amount: birr(dueSantim), reference: "", bookingId: "" }]);
   const [tendered, setTendered] = useState("");
   const entered = rows.reduce((s, r) => s + toSantim(r.amount), 0);
   const remaining = dueSantim - entered;
@@ -54,7 +57,17 @@ export function PaymentForm({ action, locale, orderId, billId, dueSantim, method
               <input name="amount" inputMode="decimal" value={row.amount} onChange={(e) => set(i, { amount: e.target.value })}
                 className="input w-28 py-2 text-right text-sm tabular-nums" aria-label={t.amount} />
             </div>
-            {kind !== "cash" && (
+            {kind === "room_charge" ? (
+              guests.length ? (
+                <select name="bookingId" value={row.bookingId} onChange={(e) => set(i, { bookingId: e.target.value })} required
+                  aria-label={t.chooseRoom} className="input py-2 text-sm">
+                  <option value="">{t.chooseRoom} *</option>
+                  {guests.map((g) => <option key={g.bookingId} value={g.bookingId}>{g.label}</option>)}
+                </select>
+              ) : <p className="text-sm text-amber-700 dark:text-amber-300">{t.noGuestsInHouse}</p>
+            ) : <input type="hidden" name="bookingId" value="" />}
+            {kind === "room_charge" && <input type="hidden" name="reference" value="" />}
+            {kind !== "cash" && kind !== "room_charge" && (
               <input name="reference" value={row.reference} onChange={(e) => set(i, { reference: e.target.value })}
                 required={kind === "mobile_money" || kind === "bank_transfer"}
                 placeholder={kind === "mobile_money" || kind === "bank_transfer" ? `${t.reference} *` : t.reference}
@@ -66,7 +79,7 @@ export function PaymentForm({ action, locale, orderId, billId, dueSantim, method
       })}
       <div className="flex flex-wrap gap-2 text-sm">
         <button type="button" className="text-brand-600"
-          onClick={() => setRows((rs) => [...rs, { method: methods.find((m) => m.kind !== "cash")?.code ?? "cash", amount: remaining > 0 ? birr(remaining) : "", reference: "" }])}>
+          onClick={() => setRows((rs) => [...rs, { method: methods.find((m) => m.kind !== "cash")?.code ?? "cash", amount: remaining > 0 ? birr(remaining) : "", reference: "", bookingId: "" }])}>
           + {t.addPayment}
         </button>
       </div>

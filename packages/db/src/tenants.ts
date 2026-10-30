@@ -30,6 +30,7 @@ export async function onboardBusiness(sql: Sql, userId: string, input: OnboardIn
     const tenantId = row!.id;
     await tx`select seed_payment_methods(${tenantId})`;
     await tx`select seed_inventory_defaults(${tenantId})`;
+    if (hasRooms(input.businessType)) await tx`select seed_hotel_defaults(${tenantId})`;
     // onboard_business set app.tenant_id for this transaction, so these rows pass RLS.
     const roles = await tx<{ id: string; name: SystemRole }[]>`select id, name from roles`;
     const grants = roles.flatMap((r) =>

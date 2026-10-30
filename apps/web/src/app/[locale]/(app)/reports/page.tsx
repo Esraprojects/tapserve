@@ -1,4 +1,4 @@
-import { auditTrail, profitReport, salesReport } from "@tapserve/db";
+import { auditTrail, hasRooms, profitReport, roomReport, salesReport } from "@tapserve/db";
 import { format } from "@tapserve/i18n";
 import { BarList, ColumnChart } from "@/components/charts";
 import { PageHeader } from "@/components/PageHeader";
@@ -15,10 +15,11 @@ type Search = Promise<Record<string, string | string[] | undefined>>;
 export default async function ReportsPage({ params, searchParams }: { params: LocaleParams; searchParams: Search }) {
   const { locale, t } = await resolveLocale(params);
   const search = await searchParams;
-  const { actor, branches, can } = await appContext(locale, "reports.view");
+  const { actor, branches, can, access } = await appContext(locale, "reports.view");
   const { from, to, branchId } = reportRange(search, branches);
   const report = await salesReport(db(), actor, { from, to }, branchId);
   const profit = can("reports.profit.view") ? await profitReport(db(), actor, { from, to }, branchId) : null;
+  const rooms = hasRooms(access.businessType) ? await roomReport(db(), actor, { from, to }, branchId) : null;
   const audit = can("audit.view") ? await auditTrail(db(), actor, { from, to }, 100) : [];
   const fmt = (v: number) => money(locale, v);
   const r = t.reports;
@@ -78,6 +79,7 @@ export default async function ReportsPage({ params, searchParams }: { params: Lo
           </div>
         ))}
       </section>
+      {rooms && rooms.rooms > 0 && <RoomSection locale={locale} t={t} report={rooms} />}
       {profit && <ProfitSection locale={locale} t={t} profit={profit} />}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
@@ -192,11 +194,12 @@ function ProfitSection({ locale, t, profit }: {
 }) {
   const p = t.profit;
   const fmt = (v: number) => money(locale, v);
-  const revenue = profit.net_sales_santim + profit.service_charge_santim;
+  const revenue = profit.net_sales_santim + profit.service_charge_santim + profit.room_revenue_santim;
   const margin = revenue > 0 ? Math.round((profit.net_profit_santim / revenue) * 100) : 0;
   const rows: { label: string; value: number; sign: string; strong?: boolean }[] = [
     { label: p.netSales, value: profit.net_sales_santim, sign: "" },
     ...(profit.service_charge_santim ? [{ label: p.serviceCharge, value: profit.service_charge_santim, sign: "+" }] : []),
+    ...(profit.room_revenue_santim ? [{ label: t.roomReport.revenue, value: profit.room_revenue_santim, sign: "+" }] : []),
     { label: p.costOfSales, value: profit.cost_of_sales_santim, sign: "−" },
     { label: p.grossProfit, value: profit.gross_profit_santim, sign: "=", strong: true },
     { label: p.stockLoss, value: profit.stock_loss_santim, sign: "−" },
@@ -255,6 +258,54 @@ function ProfitSection({ locale, t, profit }: {
             <BarList data={profit.expensesByCategory.map((c) => ({ label: pick(locale, c.name_am, c.name_en), value: c.total_santim }))} format={fmt} />
           </>
         )}
+      </div>
+    </section>
+  );
+}
+
+function RoomSection({ locale, t, report }: {
+  locale: "am" | "en";
+  t: Awaited<ReturnType<typeof resolveLocale>>["t"];
+  report: Awaited<ReturnType<typeof roomReport>>;
+}) {
+  const rr = t.roomReport;
+  const fmt = (v: number) => money(locale, v);
+  const kpis = [
+    { label: rr.occupancy, value: `${(report.occupancyBp / 100).toFixed(1)}%` },
+    { label: rr.adr, value: fmt(report.adrSantim) },
+    { label: rr.revpar, value: fmt(report.revparSantim) },
+    { label: rr.revenue, value: fmt(report.revenueSantim) },
+    { label: t.reports.tax, value: fmt(report.taxSantim) },
+    { label: rr.sold, value: `${report.roomNightsSold}`, note: format(rr.available, { n: report.roomNightsAvailable }) },
+  ];
+  return (
+    <section className="mt-6">
+      <h2 className="mb-3 font-semibold">{rr.title}</h2>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {kpis.map((k) => (
+          <div key={k.label} className="card">
+            <p className="text-sm text-stone-500">{k.label}</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums">{k.value}</p>
+            {k.note && <p className="text-xs text-stone-500">{k.note}</p>}
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        <div className="card lg:col-span-2">
+          {/* ColumnChart works in santim, so counts are scaled by 100 and back. */}
+          <h3 className="mb-3 text-sm font-semibold">{rr.daily}</h3>
+          <ColumnChart label={rr.daily} data={report.daily.map((d) => ({ label: shortDay(d.day, locale), value: d.sold * 100 }))} format={(v) => String(v / 100)} />
+        </div>
+        <div className="card space-y-4">
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">{rr.bySource}</h3>
+            <BarList data={report.bySource.map((x) => ({ label: t.hotel.sources[x.source as keyof typeof t.hotel.sources] ?? x.source, value: x.revenue_santim }))} format={fmt} />
+          </div>
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">{rr.byCategory}</h3>
+            <BarList data={report.byCategory.map((x) => ({ label: t.hotel.rates[x.category as "local" | "foreign"], value: x.revenue_santim }))} format={fmt} />
+          </div>
+        </div>
       </div>
     </section>
   );

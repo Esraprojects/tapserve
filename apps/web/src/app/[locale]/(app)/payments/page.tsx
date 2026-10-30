@@ -103,7 +103,12 @@ export default async function PaymentsPage({ params, searchParams }: { params: L
                   <td className="px-3 py-2">{pick(locale, r.method_am, r.method_en)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{r.reference || "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(locale, r.amount_santim)}</td>
-                  <td className="px-3 py-2"><a className="text-brand-700 hover:underline dark:text-brand-500" href={`/${locale}/orders/${r.order_id}`}>#{r.receipt_no}</a>{branches.length > 1 ? ` · ${r.branch_name}` : ""}</td>
+                  <td className="px-3 py-2">
+                    {r.order_id
+                      ? <a className="text-brand-700 hover:underline dark:text-brand-500" href={`/${locale}/orders/${r.order_id}`}>#{r.receipt_no}</a>
+                      : <a className="text-brand-700 hover:underline dark:text-brand-500" href={`/${locale}/hotel/bookings/${r.booking_id}`}>{format(t.hotel.booking, { n: r.booking_no ?? "" })}</a>}
+                    {branches.length > 1 ? ` · ${r.branch_name}` : ""}
+                  </td>
                   <td className="px-3 py-2">{r.received_by}</td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap items-center gap-1">

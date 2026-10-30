@@ -14,9 +14,12 @@ export interface PaymentRow {
   method_en: string;
   method_kind: string;
   reference: string;
-  receipt_no: number;
-  bill_id: string;
-  order_id: string;
+  /** Restaurant payments have a bill; hotel deposits and folio payments have a booking instead. */
+  receipt_no: number | null;
+  bill_id: string | null;
+  order_id: string | null;
+  booking_id: string | null;
+  booking_no: number | null;
   received_by: string;
   check_status: PaymentCheckStatus | null;
   check_note: string | null;
@@ -44,18 +47,20 @@ export async function listPayments(sql: Sql, actor: Actor, filter: PaymentFilter
     select p.id, p.created_at, br.name as branch_name, p.amount_santim::int as amount_santim,
            pm.code as method_code, pm.name_am as method_am, pm.name_en as method_en, pm.kind as method_kind,
            p.reference, b.receipt_no::int as receipt_no, b.id as bill_id, b.order_id,
+           bk.id as booking_id, bk.booking_no::int as booking_no,
            coalesce(nullif(u.full_name, ''), u.phone, u.email, '') as received_by,
            pc.status as check_status, pc.note as check_note,
            coalesce(nullif(cu.full_name, ''), cu.phone, cu.email) as checked_by, pc.checked_at
     from payments p
     join payment_methods pm on pm.id = p.method_id
-    join bills b on b.id = p.bill_id
-    join branches br on br.id = b.branch_id
+    left join bills b on b.id = p.bill_id
+    left join bookings bk on bk.id = p.booking_id
+    join branches br on br.id = coalesce(b.branch_id, bk.branch_id)
     join users u on u.id = p.received_by
     left join payment_checks pc on pc.payment_id = p.id
     left join users cu on cu.id = pc.checked_by
     where (p.created_at at time zone 'Africa/Addis_Ababa')::date between ${filter.range.from}::date and ${filter.range.to}::date
-      and (${filter.branchId}::uuid is null or b.branch_id = ${filter.branchId}::uuid)
+      and (${filter.branchId}::uuid is null or br.id = ${filter.branchId}::uuid)
       and (${method}::text is null or pm.code = ${method}::text)
       and (${check}::text is null
            or (${check}::text = 'unchecked' and pc.payment_id is null)

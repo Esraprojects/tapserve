@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { sellsAtCounter } from "@tapserve/db";
+import { hasRooms, sellsAtCounter } from "@tapserve/db";
 import { AppNav } from "@/components/AppNav";
 import { ServiceWorker } from "@/components/ServiceWorker";
 import { resolveLocale, type LocaleParams } from "@/lib/locale";
@@ -10,10 +10,13 @@ export default async function AppLayout({ children, params }: { children: ReactN
   const ctx = await appContext(locale);
   // Cafés and bars work at the counter, so tables move out of the phone's bottom bar.
   const counter = sellsAtCounter(ctx.access.businessType);
+  const hotel = hasRooms(ctx.access.businessType);
   const items = [
     { href: "dashboard", label: t.nav.dashboard, icon: "◧", show: true, primary: true },
+    { href: "hotel", label: t.nav.frontDesk, icon: "⌂", show: hotel && ctx.can("hotel.frontdesk"), primary: true },
+    { href: "housekeeping", label: t.nav.housekeeping, icon: "✧", show: hotel && (ctx.can("hotel.housekeeping") || ctx.can("hotel.frontdesk")), primary: !ctx.can("hotel.frontdesk") },
     { href: "pos", label: t.nav.pos, icon: "＋", show: ctx.can("order.create"), primary: true },
-    { href: "tables", label: t.nav.tables, icon: "▦", show: ctx.can("order.create"), primary: !counter },
+    { href: "tables", label: t.nav.tables, icon: "▦", show: ctx.can("order.create"), primary: !counter && !hotel },
     { href: "orders", label: t.nav.orders, icon: "☰", show: ctx.can("order.create"), primary: true },
     { href: "kitchen", label: t.nav.kitchen, icon: "♨", show: ctx.can("kitchen.manage"), primary: !ctx.can("order.create") },
     { href: "shifts", label: t.nav.shifts, icon: "◷", show: ctx.can("shift.manage"), primary: false },

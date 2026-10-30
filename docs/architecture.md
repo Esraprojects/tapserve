@@ -50,3 +50,19 @@ Stored as `timestamptz` (UTC). Displayed in the Ethiopian calendar via
 
 SMS gateways, payment providers (Chapa, Telebirr) and fiscal printers get interfaces so they can
 be added without touching the core.
+
+## Hotel (hotel and hotel + restaurant businesses only)
+
+- `rooms`, `room_types` (resident and foreigner rates, weekend rates) and `rate_seasons`. A night's
+  price is: agreed rate on the booking, else a season covering the night, else the weekend rate
+  (Friday and Saturday nights), else the normal rate (`nightlyRate` in `packages/core`).
+- `bookings` cannot double-book a room: an exclusion constraint (`btree_gist`) refuses two live
+  bookings whose `[arrival, departure)` ranges overlap on the same room.
+- The guest folio is `folio_charges` (room nights, restaurant bills, extras, discounts, refunds)
+  minus `payments` with a `booking_id`. Deposits and folio payments share the `payments` table with
+  restaurant bills, so the payments register, statement checks and the drawer count include them.
+- A restaurant bill paid with the "Charge to room" method (`room_charge`) adds a `restaurant`
+  charge to the in-house guest's folio. Its tax is already on the restaurant bill.
+- Room nights are charged by the night audit (once per branch and day) and at check-out; a night
+  is never charged twice (unique index on booking and night). Check-out needs a zero balance.
+- Check-in needs the guest's ID type and number; foreign guests register with a passport.
