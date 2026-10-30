@@ -1,5 +1,6 @@
 import { computeBill, type TaxType } from "@tapserve/core";
 import { type Sql, type Tx, withTenant } from "../client";
+import { chargeBillToRoom } from "../hotel/folio";
 import { type Actor, DomainError, requirePermission } from "./common";
 
 export interface PaymentMethod {
@@ -118,6 +119,8 @@ export interface PaymentInput {
   methodCode: string;
   amountSantim: number;
   reference?: string;
+  /** For "Charge to room": the in-house guest's booking. */
+  bookingId?: string;
 }
 
 /**
@@ -132,8 +135,8 @@ export async function recordPayments(sql: Sql, actor: Actor, billId: string, pay
     if (!Number.isSafeInteger(p.amountSantim) || p.amountSantim <= 0) throw new DomainError("invalid_amount");
   }
   return withTenant(sql, actor, async (tx) => {
-    const [bill] = await tx<{ id: string; branch_id: string; order_id: string; status: string; total: number; paid: number }[]>`
-      select b.id, b.branch_id, b.order_id, b.status, b.total_santim::int as total,
+    const [bill] = await tx<{ id: string; branch_id: string; order_id: string; status: string; total: number; paid: number; receipt_no: number }[]>`
+      select b.id, b.branch_id, b.order_id, b.status, b.total_santim::int as total, b.receipt_no::int as receipt_no,
              coalesce((select sum(amount_santim) from payments where bill_id = b.id), 0)::int as paid
       from bills b where b.id = ${billId} for update`;
     if (!bill) throw new DomainError("not_found");
@@ -148,14 +151,29 @@ export async function recordPayments(sql: Sql, actor: Actor, billId: string, pay
     const codes = [...new Set(payments.map((p) => p.methodCode))];
     const methods = await tx<{ id: string; code: string; kind: string }[]>`
       select id, code, kind from payment_methods where enabled and code in ${tx(codes)}`;
-    const rows = payments.map((p) => {
+    for (const p of payments) {
       const method = methods.find((m) => m.code === p.methodCode);
       if (!method) throw new DomainError("unknown_payment_method");
       // Telebirr, CBE Birr and bank transfers are reconciled against the provider statement by this number.
       if (REFERENCE_REQUIRED.includes(method.kind) && !(p.reference ?? "").trim()) throw new DomainError("reference_required");
-      return { bill_id: billId, method_id: method.id, amount_santim: p.amountSantim, reference: (p.reference ?? "").trim().slice(0, 100), shift_id: shift.id };
-    });
-    await tx`insert into payments ${tx(rows)}`;
+      let reference = (p.reference ?? "").trim().slice(0, 100);
+      let bookingId: string | null = null;
+      if (method.kind === "room_charge") {
+        // Only a guest who is staying now can have a bill put on their room.
+        const [stay] = await tx<{ id: string; room_number: string }[]>`
+          select b.id, r.number as room_number from bookings b join rooms r on r.id = b.room_id
+          where b.id = ${p.bookingId ?? null} and b.status = 'checked_in' for update of b`;
+        if (!stay) throw new DomainError("guest_not_in_house");
+        bookingId = stay.id;
+        reference = stay.room_number;
+      }
+      const [row] = await tx<{ id: string }[]>`
+        insert into payments (bill_id, method_id, amount_santim, reference, shift_id)
+        values (${billId}, ${method.id}, ${p.amountSantim}, ${reference}, ${shift.id}) returning id`;
+      if (bookingId) {
+        await chargeBillToRoom(tx, { bookingId, billId, paymentId: row!.id, amountSantim: p.amountSantim, receiptNo: bill.receipt_no });
+      }
+    }
 
     if (bill.paid + total === bill.total) {
       await tx`update bills set status = 'paid', paid_at = now() where id = ${billId}`;

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { liveStatus, lowStock, profitReport, salesReport } from "@tapserve/db";
+import { hasRooms, hotelToday, listMemberships, liveStatus, lowStock, profitReport, roomReport, salesReport } from "@tapserve/db";
 import { format } from "@tapserve/i18n";
 import { BarList, ColumnChart } from "@/components/charts";
 import { FormError } from "@/components/FormError";
@@ -8,6 +8,7 @@ import { param, resolveLocale, type LocaleParams } from "@/lib/locale";
 import { money, pick } from "@/lib/text";
 import { db } from "@/server/db";
 import { appContext } from "@/server/context";
+import { switchBusinessAction } from "../actions";
 
 type Search = Promise<Record<string, string | string[] | undefined>>;
 
@@ -27,7 +28,12 @@ export default async function DashboardPage({ params, searchParams }: { params: 
       ])
     : [null, null];
   const profit = can("reports.profit.view") ? await profitReport(db(), actor, { from: today, to: today }, branchId) : null;
+  const others = (await listMemberships(db(), session.user.id)).filter((m) => m.tenant_id !== access.tenantId);
   const low = can("inventory.manage") ? await lowStock(db(), actor, branchId) : [];
+  const hotel = hasRooms(access.businessType) ? await hotelToday(db(), actor, branchId) : null;
+  // Rooms are charged by the night audit, so the week's rates run up to last night.
+  const rooms = hotel && hotel.rooms > 0 && canReports
+    ? await roomReport(db(), actor, { from: addDays(today, -7), to: addDays(today, -1) }, branchId) : null;
   const fmt = (v: number) => money(locale, v);
 
   const tiles = [
@@ -45,6 +51,15 @@ export default async function DashboardPage({ params, searchParams }: { params: 
         <p className="text-sm text-stone-500">{access.tenantName} · {roleName}</p>
         <h1 className="text-2xl font-bold">{format(t.dashboard.welcome, { name })}</h1>
         <p className="mt-1 text-sm text-stone-500">{t.common.today}: {bothCalendars(today, locale)}</p>
+        {others.length > 0 && (
+          <form action={switchBusinessAction} className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <input type="hidden" name="locale" value={locale} />
+            <span className="text-stone-500">{t.dashboard.switchBusiness}:</span>
+            {others.map((m) => (
+              <button key={m.tenant_id} name="tenantId" value={m.tenant_id} className="btn-secondary min-h-10 px-3">{m.tenant_name}</button>
+            ))}
+          </form>
+        )}
       </header>
       <FormError t={t} code={param(search.error)} />
       {low.length > 0 && (
@@ -53,6 +68,25 @@ export default async function DashboardPage({ params, searchParams }: { params: 
         </Link>
       )}
 
+      {hotel && hotel.rooms > 0 && (
+        <section className="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          {[
+            { label: t.dashboard.occupancyNow, value: `${hotel.inHouse} / ${hotel.rooms}`, href: "hotel" },
+            { label: t.dashboard.arrivalsToday, value: String(hotel.arrivals), href: "hotel" },
+            { label: t.dashboard.departuresToday, value: String(hotel.departures), href: "hotel" },
+            { label: t.dashboard.roomsToClean, value: String(hotel.dirty), href: "housekeeping" },
+            ...(rooms ? [
+              { label: `${t.roomReport.adr} · ${t.reports.last7Days}`, value: fmt(rooms.adrSantim), href: "reports" },
+              { label: `RevPAR · ${t.reports.last7Days}`, value: fmt(rooms.revparSantim), href: "reports" },
+            ] : []),
+          ].map((tile) => (
+            <Link key={tile.label} href={`/${locale}/${tile.href}`} className="card hover:border-brand-500">
+              <p className="text-sm text-stone-500">{tile.label}</p>
+              <p className="mt-2 text-2xl font-semibold tabular-nums">{tile.value}</p>
+            </Link>
+          ))}
+        </section>
+      )}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         {tiles.map((tile) => (
           <div key={tile.label} className={`card ${tile.hero ? "col-span-2 lg:col-span-1" : ""}`}>
