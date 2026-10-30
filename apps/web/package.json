@@ -14,11 +14,13 @@
     "@tapserve/ethiopian-calendar": "workspace:*",
     "@tapserve/i18n": "workspace:*",
     "next": "15.5.4",
+    "qrcode": "1.5.4",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/qrcode": "1.5.5",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "autoprefixer": "^10.4.20",

@@ -10,6 +10,7 @@ export const PERMISSIONS = [
   "order.discount",
   "payment.record",
   "payment.refund",
+  "payment.verify",
   "shift.manage",
   "inventory.manage",
   "expenses.manage",
@@ -46,7 +47,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRole, readonly Permission[]>
   Receptionist: ["hotel.frontdesk", "payment.record"],
   Housekeeping: ["hotel.housekeeping"],
   Storekeeper: ["inventory.manage"],
-  Accountant: ["reports.view", "reports.profit.view", "expenses.manage", "audit.view"],
+  Accountant: ["reports.view", "reports.profit.view", "expenses.manage", "payment.verify", "audit.view"],
 };
 
 export function hasPermission(granted: readonly string[], needed: Permission): boolean {

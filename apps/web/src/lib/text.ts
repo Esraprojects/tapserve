@@ -18,3 +18,8 @@ export function errorMessage(t: Dictionary, code: string | undefined): string | 
 }
 
 export { format };
+
+/** Stock quantities: up to three decimals, no trailing zeros. */
+export function quantity(locale: Locale, value: number): string {
+  return new Intl.NumberFormat(locale === "am" ? "am-ET" : "en-US", { maximumFractionDigits: 3 }).format(value);
+}

@@ -1,7 +1,7 @@
 import { type Sql, type Tx, withTenant } from "../client";
 import { type Actor, DomainError, requirePermission, type Station } from "./common";
 
-export type OrderType = "dine_in" | "takeaway" | "delivery";
+export type OrderType = "dine_in" | "takeaway" | "delivery" | "counter";
 export type ItemStatus = "new" | "preparing" | "ready" | "served" | "voided";
 
 export interface OrderLineInput {
@@ -126,15 +126,23 @@ export async function createOrder(sql: Sql, actor: Actor, input: CreateOrderInpu
   });
 }
 
-export async function addItems(sql: Sql, actor: Actor, orderId: string, items: OrderLineInput[]): Promise<void> {
+/** Add a round of items to an open order. A batchUuid from the device makes a re-sent round a no-op. */
+export async function addItems(
+  sql: Sql, actor: Actor, orderId: string, items: OrderLineInput[], batchUuid?: string,
+): Promise<void> {
   requirePermission(actor, "order.create");
   await withTenant(sql, actor, async (tx) => {
     const [order] = await tx<{ branch_id: string; status: string }[]>`
       select branch_id, status from orders where id = ${orderId} for update`;
     if (!order) throw new DomainError("not_found");
     if (order.status !== "open") throw new DomainError("order_closed");
+    if (batchUuid) {
+      // The order row lock above serialises retries of the same batch.
+      const [seen] = await tx`select 1 from order_items where order_id = ${orderId} and batch_uuid = ${batchUuid} limit 1`;
+      if (seen) return;
+    }
     const lines = await buildLines(tx, order.branch_id, items);
-    await tx`insert into order_items ${tx(lines.map((l) => ({ ...l, order_id: orderId })))}`;
+    await tx`insert into order_items ${tx(lines.map((l) => ({ ...l, order_id: orderId, batch_uuid: batchUuid ?? null })))}`;
     await tx`update orders set bill_requested_at = null where id = ${orderId}`;
   });
 }
@@ -330,4 +338,12 @@ export async function kitchenQueue(sql: Sql, actor: Actor, branchId: string, sta
     where o.branch_id = ${branchId} and o.status = 'open' and oi.station = ${station}
       and oi.status in ('new', 'preparing', 'ready')
     order by oi.seq`);
+}
+
+/** The open order on a table, if any (used to merge an offline order into it). */
+export async function openOrderForTable(sql: Sql, actor: Actor, tableId: string): Promise<string | null> {
+  return withTenant(sql, actor, async (tx) => {
+    const [row] = await tx<{ id: string }[]>`select id from orders where table_id = ${tableId} and status = 'open' limit 1`;
+    return row?.id ?? null;
+  });
 }

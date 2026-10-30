@@ -1,12 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { formatETB } from "@tapserve/core";
 import type { Dictionary } from "@tapserve/i18n";
 import type { Menu, MenuItem, MenuVariant } from "@tapserve/db";
 import { submitOrderAction, type SubmitOrderPayload } from "@/app/[locale]/(app)/pos/actions";
-import { enqueue, readOutbox, remove } from "./outbox";
+import { OutboxPanel } from "./OutboxPanel";
+import { useOutbox } from "./useOutbox";
 
 type Locale = "am" | "en";
 
@@ -21,12 +22,16 @@ interface CartLine {
 
 interface Props {
   locale: Locale;
-  t: Pick<Dictionary, "pos" | "menu" | "domain" | "errors">;
+  t: Pick<Dictionary, "pos" | "menu" | "domain" | "errors" | "offline">;
   menu: Menu;
   tables: { id: string; name: string; status: string }[];
   initialTableId: string | null;
   existingOrder: { id: string; orderNo: number; tableName: string | null } | null;
+  /** Cafés and coffee houses: sell at the counter by default. */
+  counterFirst: boolean;
 }
+
+type OrderType = "dine_in" | "takeaway" | "delivery" | "counter";
 
 const pick = (locale: Locale, am: string, en: string) => (locale === "am" ? am || en : en || am);
 
@@ -36,44 +41,18 @@ function newUuid(): string {
     (Number(c) ^ (Math.random() * 16) >> (Number(c) / 4)).toString(16));
 }
 
-export function PosScreen({ locale, t, menu, tables, initialTableId, existingOrder }: Props) {
+export function PosScreen({ locale, t, menu, tables, initialTableId, existingOrder, counterFirst }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [categoryId, setCategoryId] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [fastingOnly, setFastingOnly] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [type, setType] = useState<"dine_in" | "takeaway" | "delivery">(initialTableId || !existingOrder ? "dine_in" : "takeaway");
+  const types: OrderType[] = counterFirst ? ["counter", "takeaway", "delivery", "dine_in"] : ["dine_in", "takeaway", "delivery", "counter"];
+  const [type, setType] = useState<OrderType>(initialTableId ? "dine_in" : types[0]!);
   const [tableId, setTableId] = useState<string>(initialTableId ?? "");
   const [error, setError] = useState<string | null>(null);
-  const [online, setOnline] = useState(true);
-  const [queued, setQueued] = useState(0);
-
-  // Re-send queued orders when the connection comes back.
-  useEffect(() => {
-    const flush = async () => {
-      setOnline(navigator.onLine);
-      const items = readOutbox();
-      setQueued(items.length);
-      if (!navigator.onLine) return;
-      for (const item of items) {
-        try {
-          const res = await submitOrderAction(item);
-          if (res.ok || res.error !== "unknown") remove(item.clientUuid);
-        } catch {
-          break;
-        }
-      }
-      setQueued(readOutbox().length);
-    };
-    flush();
-    window.addEventListener("online", flush);
-    window.addEventListener("offline", flush);
-    return () => {
-      window.removeEventListener("online", flush);
-      window.removeEventListener("offline", flush);
-    };
-  }, []);
+  const outbox = useOutbox();
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -131,13 +110,25 @@ export function PosScreen({ locale, t, menu, tables, initialTableId, existingOrd
           setError((t.domain as Record<string, string>)[res.error] ?? t.errors.unknown);
         }
       } catch {
-        // Network failure: keep the order on this device and send it later.
-        enqueue(payload);
-        setQueued(readOutbox().length);
+        // Network failure: keep the order on this device; the outbox sends it when the line is back.
+        await outbox.save(payload);
         setCart([]);
-        setError(t.pos.offline);
+        setError(t.offline.savedOffline);
       }
     });
+  }
+
+  const variantPrice = new Map(menu.categories.flatMap((c) => c.items).flatMap((i) => i.variants.map((v) => [v.id, { item: i, price: v.price_santim }] as const)));
+  function describeEntry(p: SubmitOrderPayload) {
+    const names = p.items.map((l) => {
+      const v = variantPrice.get(l.variantId);
+      return `${l.quantity}× ${v ? pick(locale, v.item.name_am, v.item.name_en) : "?"}`;
+    });
+    const table = tables.find((x) => x.id === p.tableId)?.name;
+    return {
+      title: [table ?? t.pos.types[p.type], names.join(", ")].join(" · "),
+      total: p.items.reduce((s, l) => s + (variantPrice.get(l.variantId)?.price ?? 0) * l.quantity, 0),
+    };
   }
 
   const freeTables = tables.filter((x) => x.status === "free" || x.id === initialTableId);
@@ -204,13 +195,22 @@ export function PosScreen({ locale, t, menu, tables, initialTableId, existingOrd
         <h2 className="mb-3 text-lg font-semibold">
           {existingOrder ? t.pos.addToOrder.replace("{no}", String(existingOrder.orderNo)) : t.pos.cart}
         </h2>
-        {!online && <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">{t.pos.offline}</p>}
-        {queued > 0 && online && <p className="mb-3 text-sm text-stone-500">⟳ {queued}</p>}
+        <OutboxPanel
+          locale={locale}
+          t={t}
+          online={outbox.online}
+          syncing={outbox.syncing}
+          pending={outbox.pending}
+          failed={outbox.failed}
+          onRetry={(entry, append) => void outbox.retry(entry, append ? { appendIfTableBusy: true } : {})}
+          onDiscard={(entry) => void outbox.discard(entry)}
+          describe={(entry) => describeEntry(entry.payload)}
+        />
 
         {!existingOrder && (
           <div className="mb-3 space-y-2">
             <div className="flex gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-800" role="radiogroup" aria-label={t.pos.type}>
-              {(["dine_in", "takeaway", "delivery"] as const).map((x) => (
+              {types.map((x) => (
                 <button key={x} role="radio" aria-checked={type === x} onClick={() => setType(x)}
                   className={`flex-1 rounded-lg py-2 text-sm font-medium ${type === x ? "bg-white shadow-sm dark:bg-stone-700" : "text-stone-500"}`}>
                   {t.pos.types[x]}
@@ -268,7 +268,7 @@ export function PosScreen({ locale, t, menu, tables, initialTableId, existingOrd
           <span className="tabular-nums">{formatETB(total, locale)}</span>
         </div>
         <button onClick={submit} disabled={!cart.length || pending} className="btn mt-3 disabled:opacity-50">
-          {pending ? "…" : t.pos.send}
+          {pending ? "…" : !existingOrder && type === "counter" ? t.pos.charge : t.pos.send}
         </button>
       </aside>
     </div>

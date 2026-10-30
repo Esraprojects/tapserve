@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="am">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tapserve · Offline</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #57534e; --brand: #18735a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --brand: #36a882; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font-family: "Noto Sans Ethiopic", system-ui, sans-serif; padding: 16px; text-align: center; }
+  h1 { font-size: 1.4rem; margin: 0 0 .5rem; }
+  p { color: var(--muted); margin: .25rem 0; }
+  button { margin-top: 1rem; background: var(--brand); color: #fff; border: 0; border-radius: 12px; padding: 12px 20px; font-size: 1rem; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>ግንኙነት የለም · No connection</h1>
+    <p>ይህ ገጽ ገና በዚህ መሳሪያ አልተቀመጠም። ግንኙነት ሲመለስ እንደገና ይሞክሩ።</p>
+    <p>This page has not been saved on this device yet. Try again when you are back online.</p>
+    <button onclick="location.reload()">እንደገና ሞክር · Try again</button>
+  </main>
+</body>
+</html>

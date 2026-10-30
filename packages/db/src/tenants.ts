@@ -5,6 +5,12 @@ import { DomainError } from "./restaurant/common";
 export const BUSINESS_TYPES = ["restaurant", "cafe", "bar", "hotel", "hotel_restaurant"] as const;
 export type BusinessType = (typeof BUSINESS_TYPES)[number];
 
+/** Rooms, reservations, front desk and housekeeping only appear for hotels. */
+export const hasRooms = (type: BusinessType) => type === "hotel" || type === "hotel_restaurant";
+
+/** Cafés, coffee houses and bars mostly sell at the counter; tables are optional there. */
+export const sellsAtCounter = (type: BusinessType) => type === "cafe" || type === "bar";
+
 export interface OnboardInput {
   name: string;
   businessType: BusinessType;
@@ -23,6 +29,7 @@ export async function onboardBusiness(sql: Sql, userId: string, input: OnboardIn
         ${input.subCity.trim()}, ${input.tin?.trim() || null}, ${input.branchName.trim()}, ${input.locale}) as id`;
     const tenantId = row!.id;
     await tx`select seed_payment_methods(${tenantId})`;
+    await tx`select seed_inventory_defaults(${tenantId})`;
     // onboard_business set app.tenant_id for this transaction, so these rows pass RLS.
     const roles = await tx<{ id: string; name: SystemRole }[]>`select id, name from roles`;
     const grants = roles.flatMap((r) =>
@@ -121,11 +128,13 @@ export interface StaffMember {
   email: string | null;
   role_name: string;
   status: "active" | "disabled";
+  has_pin: boolean;
 }
 
 export async function listStaff(sql: Sql, ctx: { tenantId: string; userId: string }): Promise<StaffMember[]> {
   return withTenant(sql, ctx, (tx) => tx<StaffMember[]>`
-    select m.id as membership_id, u.id as user_id, u.full_name, u.phone, u.email, r.name as role_name, m.status
+    select m.id as membership_id, u.id as user_id, u.full_name, u.phone, u.email, r.name as role_name, m.status,
+           m.pin_hash is not null as has_pin
     from memberships m join users u on u.id = m.user_id join roles r on r.id = m.role_id
     order by r.name = 'Owner' desc, u.full_name`);
 }

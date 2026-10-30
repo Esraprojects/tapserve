@@ -219,7 +219,8 @@ describe("bills, payments and shifts", () => {
     const billB = await createBill(app, owner, orderId, [shiroLine.id]);
     expect(await errorCode(recordPayments(app, owner, billB, [{ methodCode: "cash", amountSantim: 36_001 }]))).toBe("overpayment");
     expect(await errorCode(recordPayments(app, owner, billB, [{ methodCode: "bitcoin", amountSantim: 100 }]))).toBe("unknown_payment_method");
-    await recordPayments(app, owner, billB, [{ methodCode: "cbe_birr", amountSantim: 36_000 }]);
+    expect(await errorCode(recordPayments(app, owner, billB, [{ methodCode: "cbe_birr", amountSantim: 36_000 }]))).toBe("reference_required");
+    await recordPayments(app, owner, billB, [{ methodCode: "cbe_birr", amountSantim: 36_000, reference: "FT26303ABCD" }]);
     expect((await getOrder(app, owner, orderId))?.status).toBe("paid");
 
     const receipt = (await getReceipt(app, owner, billA))!;

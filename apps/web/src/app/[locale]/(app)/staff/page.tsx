@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { param, resolveLocale, type LocaleParams } from "@/lib/locale";
 import { db } from "@/server/db";
 import { appContext } from "@/server/context";
-import { addStaffAction, setStaffStatusAction } from "./actions";
+import { addStaffAction, clearPinAction, setStaffStatusAction } from "./actions";
 
 type Search = Promise<Record<string, string | string[] | undefined>>;
 
@@ -27,8 +27,15 @@ export default async function StaffPage({ params, searchParams }: { params: Loca
             <li key={m.membership_id} className="flex items-center gap-3 px-5 py-3">
               <div className="min-w-0 flex-1">
                 <p className="font-medium">{m.full_name || m.phone || m.email}</p>
-                <p className="text-sm text-stone-500">{roleName(m.role_name)} · {m.phone ?? m.email}</p>
+                <p className="text-sm text-stone-500">{roleName(m.role_name)} · {m.phone ?? m.email}{m.has_pin ? ` · ${t.pin.hasPin}` : ""}</p>
               </div>
+              {m.has_pin && m.user_id !== actor.userId && (
+                <form action={clearPinAction}>
+                  <input type="hidden" name="locale" value={locale} />
+                  <input type="hidden" name="membershipId" value={m.membership_id} />
+                  <button className="min-h-10 px-2 text-sm text-stone-500 underline">{t.pin.clear}</button>
+                </form>
+              )}
               {m.status === "disabled" && <span className="text-sm text-stone-500">{t.staff.disabled}</span>}
               {m.role_name !== "Owner" && m.user_id !== actor.userId && (
                 <form action={setStaffStatusAction}>

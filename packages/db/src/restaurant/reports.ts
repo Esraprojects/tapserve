@@ -121,3 +121,89 @@ export async function auditTrail(sql: Sql, actor: Actor, range: DateRange, limit
     where (a.at at time zone 'Africa/Addis_Ababa')::date between ${range.from}::date and ${range.to}::date
     order by a.at desc limit ${limit}`);
 }
+
+export interface ProfitReport {
+  /** Sales without tax and service charge, from paid bills. */
+  net_sales_santim: number;
+  service_charge_santim: number;
+  /** Ingredients used by sales (net of items voided before cooking). */
+  cost_of_sales_santim: number;
+  /** Spoiled or spilled stock, plus stock-count shortages (gains reduce it). */
+  stock_loss_santim: number;
+  expenses_santim: number;
+  gross_profit_santim: number;
+  net_profit_santim: number;
+  /** Menu items without a recipe sold in the range; their cost is missing from cost of sales. */
+  items_without_recipe: number;
+  expensesByCategory: { name_am: string; name_en: string; total_santim: number }[];
+  daily: { day: string; net_sales_santim: number; cost_santim: number; expenses_santim: number; profit_santim: number }[];
+}
+
+/**
+ * Profit = net sales + service charge - cost of sales - stock losses - expenses.
+ * Costs come from the stock ledger, so they are only as complete as the recipes and purchases entered.
+ */
+export async function profitReport(sql: Sql, actor: Actor, range: DateRange, branchId: string | null): Promise<ProfitReport> {
+  requirePermission(actor, "reports.profit.view");
+  return withTenant(sql, actor, async (tx) => {
+    const inRange = (col: string) =>
+      tx`(${tx.unsafe(col)} at time zone 'Africa/Addis_Ababa')::date between ${range.from}::date and ${range.to}::date`;
+    const branch = (col: string) => tx`(${branchId}::uuid is null or ${tx.unsafe(col)} = ${branchId}::uuid)`;
+    const daily = await tx<{ day: string; net: number; service: number; cost: number; loss: number; expenses: number }[]>`
+      with days as (select d::date as d from generate_series(${range.from}::date, ${range.to}::date, interval '1 day') d),
+      sales as (
+        select (b.paid_at at time zone 'Africa/Addis_Ababa')::date as d, sum(b.subtotal_santim) as net,
+               sum(b.service_charge_santim) as service
+        from bills b where b.status = 'paid' and ${inRange("b.paid_at")} and ${branch("b.branch_id")} group by 1),
+      stock as (
+        select (m.created_at at time zone 'Africa/Addis_Ababa')::date as d,
+               -sum(m.value_santim) filter (where m.kind in ('sale', 'void_return')) as cost,
+               -sum(m.value_santim) filter (where m.kind in ('waste', 'count_adjustment')) as loss
+        from stock_movements m where ${inRange("m.created_at")} and ${branch("m.branch_id")} group by 1),
+      spent as (
+        select e.spent_on as d, sum(e.amount_santim) as expenses
+        from expenses e
+        where e.voided_at is null and e.spent_on between ${range.from}::date and ${range.to}::date and ${branch("e.branch_id")}
+        group by 1)
+      select to_char(days.d, 'YYYY-MM-DD') as day, coalesce(s.net, 0)::int as net, coalesce(s.service, 0)::int as service,
+             coalesce(st.cost, 0)::int as cost, coalesce(st.loss, 0)::int as loss, coalesce(sp.expenses, 0)::int as expenses
+      from days left join sales s on s.d = days.d left join stock st on st.d = days.d left join spent sp on sp.d = days.d
+      order by days.d`;
+    const expensesByCategory = await tx<ProfitReport["expensesByCategory"]>`
+      select c.name_am, c.name_en, sum(e.amount_santim)::int as total_santim
+      from expenses e join expense_categories c on c.id = e.category_id
+      where e.voided_at is null and e.spent_on between ${range.from}::date and ${range.to}::date and ${branch("e.branch_id")}
+      group by c.id, c.name_am, c.name_en order by total_santim desc`;
+    const [missing] = await tx<{ n: number }[]>`
+      select count(distinct oi.variant_id)::int as n
+      from bill_items bi join bills b on b.id = bi.bill_id join order_items oi on oi.id = bi.order_item_id
+      where b.status = 'paid' and ${inRange("b.paid_at")} and ${branch("b.branch_id")}
+        and oi.variant_id is not null
+        and not exists (select 1 from recipe_lines rl where rl.variant_id = oi.variant_id)`;
+    const sum = (k: "net" | "service" | "cost" | "loss" | "expenses") => daily.reduce((s, d) => s + d[k], 0);
+    const net = sum("net");
+    const service = sum("service");
+    const cost = sum("cost");
+    const loss = sum("loss");
+    const expenses = sum("expenses");
+    const gross = net + service - cost;
+    return {
+      net_sales_santim: net,
+      service_charge_santim: service,
+      cost_of_sales_santim: cost,
+      stock_loss_santim: loss,
+      expenses_santim: expenses,
+      gross_profit_santim: gross,
+      net_profit_santim: gross - loss - expenses,
+      items_without_recipe: missing!.n,
+      expensesByCategory,
+      daily: daily.map((d) => ({
+        day: d.day,
+        net_sales_santim: d.net,
+        cost_santim: d.cost + d.loss,
+        expenses_santim: d.expenses,
+        profit_santim: d.net + d.service - d.cost - d.loss - d.expenses,
+      })),
+    };
+  });
+}
