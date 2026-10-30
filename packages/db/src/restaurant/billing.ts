@@ -31,6 +31,8 @@ export interface BillView {
   status: "open" | "paid" | "void";
   created_at: Date;
   paid_at: Date | null;
+  /** For the customer's digital receipt link (/r/<token>). */
+  public_token: string;
 }
 
 const billColumns = (tx: Tx) => tx`
@@ -38,7 +40,7 @@ const billColumns = (tx: Tx) => tx`
   b.service_charge_santim::int as service_charge_santim, b.tax_santim::int as tax_santim,
   b.total_santim::int as total_santim,
   coalesce((select sum(p.amount_santim) from payments p where p.bill_id = b.id), 0)::int as paid_santim,
-  b.tax_type, b.tax_rate_bp, b.service_charge_rate_bp, b.prices_include_tax, b.status, b.created_at, b.paid_at`;
+  b.tax_type, b.tax_rate_bp, b.service_charge_rate_bp, b.prices_include_tax, b.status, b.created_at, b.paid_at, b.public_token`;
 
 export async function listBills(sql: Sql, actor: Actor, orderId: string): Promise<BillView[]> {
   return withTenant(sql, actor, (tx) => tx<BillView[]>`
@@ -110,6 +112,8 @@ export async function voidBill(sql: Sql, actor: Actor, billId: string, reason: s
   });
 }
 
+export const REFERENCE_REQUIRED: readonly string[] = ["mobile_money", "bank_transfer"];
+
 export interface PaymentInput {
   methodCode: string;
   amountSantim: number;
@@ -142,12 +146,14 @@ export async function recordPayments(sql: Sql, actor: Actor, billId: string, pay
     if (bill.paid + total > bill.total) throw new DomainError("overpayment");
 
     const codes = [...new Set(payments.map((p) => p.methodCode))];
-    const methods = await tx<{ id: string; code: string }[]>`
-      select id, code from payment_methods where enabled and code in ${tx(codes)}`;
+    const methods = await tx<{ id: string; code: string; kind: string }[]>`
+      select id, code, kind from payment_methods where enabled and code in ${tx(codes)}`;
     const rows = payments.map((p) => {
       const method = methods.find((m) => m.code === p.methodCode);
       if (!method) throw new DomainError("unknown_payment_method");
-      return { bill_id: billId, method_id: method.id, amount_santim: p.amountSantim, reference: (p.reference ?? "").slice(0, 100), shift_id: shift.id };
+      // Telebirr, CBE Birr and bank transfers are reconciled against the provider statement by this number.
+      if (REFERENCE_REQUIRED.includes(method.kind) && !(p.reference ?? "").trim()) throw new DomainError("reference_required");
+      return { bill_id: billId, method_id: method.id, amount_santim: p.amountSantim, reference: (p.reference ?? "").trim().slice(0, 100), shift_id: shift.id };
     });
     await tx`insert into payments ${tx(rows)}`;
 
@@ -170,6 +176,8 @@ export async function recordPayments(sql: Sql, actor: Actor, billId: string, pay
 
 export interface Receipt {
   bill: BillView;
+  /** For the customer's digital receipt link (/r/<token>). */
+  publicToken: string;
   business: { name: string; tin: string | null; city: string; sub_city: string; receipt_footer: string };
   branch: { name: string; address: string; phone: string | null };
   order: { order_no: number; type: string; table_name: string | null; waiter_name: string | null };
@@ -180,7 +188,22 @@ export interface Receipt {
 }
 
 export async function getReceipt(sql: Sql, actor: Actor, billId: string): Promise<Receipt | null> {
-  return withTenant(sql, actor, async (tx) => {
+  return withTenant(sql, actor, (tx) => loadReceipt(tx, billId));
+}
+
+/**
+ * The customer's digital receipt, opened from a link or QR code without signing in.
+ * The token resolves to exactly one business and bill; everything else runs under that tenant's RLS.
+ */
+export async function getPublicReceipt(sql: Sql, token: string): Promise<Receipt | null> {
+  if (!/^[0-9a-f]{32}$/.test(token)) return null;
+  const [ref] = await sql<{ tenant_id: string; bill_id: string }[]>`select * from resolve_receipt_token(${token})`;
+  if (!ref) return null;
+  return withTenant(sql, { tenantId: ref.tenant_id, userId: "" }, (tx) => loadReceipt(tx, ref.bill_id));
+}
+
+async function loadReceipt(tx: Tx, billId: string): Promise<Receipt | null> {
+  {
     const [bill] = await tx<(BillView & { branch_id: string; created_by: string })[]>`
       select ${billColumns(tx)}, b.branch_id, b.created_by from bills b where b.id = ${billId}`;
     if (!bill) return null;
@@ -204,6 +227,9 @@ export async function getReceipt(sql: Sql, actor: Actor, billId: string): Promis
       select pm.name_am, pm.name_en, p.amount_santim::int as amount_santim, p.reference
       from payments p join payment_methods pm on pm.id = p.method_id where p.bill_id = ${billId} order by p.seq`;
     const { branch_id: _b, created_by: _c, ...billView } = bill;
-    return { bill: billView, business: business!, branch: branch!, order: order!, cashier: cashier?.name ?? "", lines, payments };
-  });
+    return {
+      bill: billView, publicToken: billView.public_token, business: business!, branch: branch!, order: order!,
+      cashier: cashier?.name ?? "", lines, payments,
+    };
+  }
 }

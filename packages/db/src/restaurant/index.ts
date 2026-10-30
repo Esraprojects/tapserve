@@ -5,3 +5,6 @@ export * from "./orders";
 export * from "./billing";
 export * from "./shifts";
 export * from "./reports";
+export * from "./inventory";
+export * from "./expenses";
+export * from "./payments";

@@ -28,7 +28,7 @@ export default async function MenuPage({ params, searchParams }: { params: Local
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-6">
-      <PageHeader title={m.title} />
+      <PageHeader title={m.title} actions={<a href={`/${locale}/menu/costing`} className="btn-secondary">{t.recipe.title}</a>} />
       <FormError t={t} code={param(search.error)} />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">

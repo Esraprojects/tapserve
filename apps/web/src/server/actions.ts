@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { birrToSantim } from "@tapserve/core";
 import { DomainError } from "@tapserve/db";
 import { isLocale, type Locale } from "@tapserve/i18n";
 
@@ -39,4 +40,22 @@ export async function runAction(
     target = withParam(back, "error", code);
   }
   redirect(target);
+}
+
+/** A birr amount from a form field, in santim. Empty counts as zero. */
+export function birrField(form: FormData, key: string): number {
+  try {
+    return birrToSantim(str(form, key) || "0");
+  } catch {
+    throw new DomainError("invalid_amount");
+  }
+}
+
+/** A decimal quantity from a form field; null when left empty. */
+export function quantityField(form: FormData, key: string): number | null {
+  const raw = str(form, key).replace(",", ".");
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new DomainError("invalid_quantity");
+  return value;
 }

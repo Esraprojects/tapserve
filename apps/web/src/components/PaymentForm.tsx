@@ -56,7 +56,9 @@ export function PaymentForm({ action, locale, orderId, billId, dueSantim, method
             </div>
             {kind !== "cash" && (
               <input name="reference" value={row.reference} onChange={(e) => set(i, { reference: e.target.value })}
-                placeholder={t.reference} aria-label={t.reference} className="input py-2 text-sm" />
+                required={kind === "mobile_money" || kind === "bank_transfer"}
+                placeholder={kind === "mobile_money" || kind === "bank_transfer" ? `${t.reference} *` : t.reference}
+                aria-label={t.reference} className="input py-2 text-sm" />
             )}
             {kind === "cash" && <input type="hidden" name="reference" value="" />}
           </div>

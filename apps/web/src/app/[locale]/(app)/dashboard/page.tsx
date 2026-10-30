@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { liveStatus, salesReport } from "@tapserve/db";
+import { liveStatus, lowStock, profitReport, salesReport } from "@tapserve/db";
 import { format } from "@tapserve/i18n";
 import { BarList, ColumnChart } from "@/components/charts";
 import { FormError } from "@/components/FormError";
@@ -26,12 +26,15 @@ export default async function DashboardPage({ params, searchParams }: { params: 
         salesReport(db(), actor, { from: addDays(today, -6), to: today }, branchId),
       ])
     : [null, null];
+  const profit = can("reports.profit.view") ? await profitReport(db(), actor, { from: today, to: today }, branchId) : null;
+  const low = can("inventory.manage") ? await lowStock(db(), actor, branchId) : [];
   const fmt = (v: number) => money(locale, v);
 
   const tiles = [
     canReports && { label: t.dashboard.salesToday, value: fmt(day!.totals.gross_santim), hero: true },
     canReports && { label: t.reports.bills, value: String(day!.totals.bills) },
     canReports && { label: t.reports.averageBill, value: fmt(day!.totals.average_bill_santim) },
+    profit && { label: t.dashboard.profitToday, value: fmt(profit.net_profit_santim) },
     { label: t.dashboard.openTables, value: `${live.occupiedTables} / ${live.totalTables}` },
     { label: t.dashboard.orders, value: String(live.openOrders) },
   ].filter(Boolean) as { label: string; value: string; hero?: boolean }[];
@@ -44,8 +47,13 @@ export default async function DashboardPage({ params, searchParams }: { params: 
         <p className="mt-1 text-sm text-stone-500">{t.common.today}: {bothCalendars(today, locale)}</p>
       </header>
       <FormError t={t} code={param(search.error)} />
+      {low.length > 0 && (
+        <Link href={`/${locale}/inventory`} className="mb-4 block rounded-2xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-900/30 dark:text-amber-100">
+          ⚠ {t.inventory.lowStockTitle}: {low.slice(0, 6).map((i) => pick(locale, i.name_am, i.name_en)).join(", ")}{low.length > 6 ? "…" : ""}
+        </Link>
+      )}
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         {tiles.map((tile) => (
           <div key={tile.label} className={`card ${tile.hero ? "col-span-2 lg:col-span-1" : ""}`}>
             <p className="text-sm text-stone-500">{tile.label}</p>
@@ -104,7 +112,9 @@ export default async function DashboardPage({ params, searchParams }: { params: 
           </section>
         </div>
       )}
-      {canReports && <p className="mt-4 text-sm text-stone-500">{t.reports.profitNote}</p>}
+      {profit && profit.items_without_recipe > 0 && (
+        <p className="mt-4 text-sm text-stone-500">{format(t.profit.missingRecipes, { n: String(profit.items_without_recipe) })}</p>
+      )}
       {!canReports && (
         <div className="mt-6 flex flex-wrap gap-3">
           <Link href={`/${locale}/pos`} className="btn sm:w-auto">{t.nav.pos}</Link>

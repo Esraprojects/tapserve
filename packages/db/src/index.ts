@@ -5,3 +5,4 @@ export * from "./sms";
 export * from "./auth";
 export * from "./tenants";
 export * from "./restaurant";
+export * from "./pins";

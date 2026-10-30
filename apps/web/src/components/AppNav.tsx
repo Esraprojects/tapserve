@@ -6,6 +6,11 @@ import { LanguageSwitch } from "./LanguageSwitch";
 import { switchBranchAction } from "@/app/[locale]/(app)/actions";
 import { logoutAction } from "@/app/[locale]/(auth)/actions";
 
+/** Cached work screens hold business data; drop them when someone logs out of this device. */
+function clearOfflinePages() {
+  navigator.serviceWorker?.controller?.postMessage("logout");
+}
+
 interface NavItem {
   href: string;
   label: string;
@@ -57,10 +62,10 @@ export function AppNav({ locale, items, businessName, branches, branchId, labels
         <p className="text-lg font-bold text-brand-700 dark:text-brand-500">Tapserve</p>
         <p className="mb-4 truncate text-sm text-stone-500">{businessName}</p>
         {branchPicker && <div className="mb-4">{branchPicker}</div>}
-        <nav className="flex flex-1 flex-col gap-1">{items.map((i) => link(i, false))}</nav>
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto">{items.map((i) => link(i, false))}</nav>
         <div className="flex items-center justify-between">
           <LanguageSwitch locale={locale} />
-          <form action={logoutAction}>
+          <form action={logoutAction} onSubmit={clearOfflinePages}>
             <input type="hidden" name="locale" value={locale} />
             <button className="rounded-lg px-3 py-2 text-sm text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800">{labels.logout}</button>
           </form>
@@ -83,9 +88,9 @@ export function AppNav({ locale, items, businessName, branches, branchId, labels
               <span aria-hidden className="text-lg leading-none">⋯</span>
               {labels.more}
             </summary>
-            <div className="absolute bottom-full right-2 mb-2 w-52 rounded-2xl border border-stone-200 bg-white p-2 shadow-lg dark:border-stone-700 dark:bg-stone-900">
+            <div className="absolute bottom-full right-2 mb-2 max-h-[70vh] w-52 overflow-y-auto rounded-2xl border border-stone-200 bg-white p-2 shadow-lg dark:border-stone-700 dark:bg-stone-900">
               {items.filter((i) => !i.primary).map((i) => link(i, false))}
-              <form action={logoutAction}>
+              <form action={logoutAction} onSubmit={clearOfflinePages}>
                 <input type="hidden" name="locale" value={locale} />
                 <button className="w-full rounded-xl px-3 py-2.5 text-left text-sm text-stone-500">{labels.logout}</button>
               </form>

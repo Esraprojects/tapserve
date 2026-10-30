@@ -17,7 +17,10 @@ import { db } from "./db";
 export const SESSION_COOKIE = "tapserve_session";
 
 export async function startSession(userId: string): Promise<void> {
-  const token = await createSession(db(), userId);
+  await setSessionCookie(await createSession(db(), userId));
+}
+
+export async function setSessionCookie(token: string): Promise<void> {
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

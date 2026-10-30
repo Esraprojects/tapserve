@@ -1,4 +1,5 @@
-import { auditTrail, salesReport } from "@tapserve/db";
+import { auditTrail, profitReport, salesReport } from "@tapserve/db";
+import { format } from "@tapserve/i18n";
 import { BarList, ColumnChart } from "@/components/charts";
 import { PageHeader } from "@/components/PageHeader";
 import { PrintButton } from "@/components/PrintButton";
@@ -17,6 +18,7 @@ export default async function ReportsPage({ params, searchParams }: { params: Lo
   const { actor, branches, can } = await appContext(locale, "reports.view");
   const { from, to, branchId } = reportRange(search, branches);
   const report = await salesReport(db(), actor, { from, to }, branchId);
+  const profit = can("reports.profit.view") ? await profitReport(db(), actor, { from, to }, branchId) : null;
   const audit = can("audit.view") ? await auditTrail(db(), actor, { from, to }, 100) : [];
   const fmt = (v: number) => money(locale, v);
   const r = t.reports;
@@ -76,7 +78,7 @@ export default async function ReportsPage({ params, searchParams }: { params: Lo
           </div>
         ))}
       </section>
-      <p className="mt-3 text-sm text-stone-500">{r.profitNote}</p>
+      {profit && <ProfitSection locale={locale} t={t} profit={profit} />}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         <section className="card lg:col-span-2">
@@ -180,5 +182,80 @@ export default async function ReportsPage({ params, searchParams }: { params: Lo
         </section>
       )}
     </main>
+  );
+}
+
+function ProfitSection({ locale, t, profit }: {
+  locale: "am" | "en";
+  t: Awaited<ReturnType<typeof resolveLocale>>["t"];
+  profit: Awaited<ReturnType<typeof profitReport>>;
+}) {
+  const p = t.profit;
+  const fmt = (v: number) => money(locale, v);
+  const revenue = profit.net_sales_santim + profit.service_charge_santim;
+  const margin = revenue > 0 ? Math.round((profit.net_profit_santim / revenue) * 100) : 0;
+  const rows: { label: string; value: number; sign: string; strong?: boolean }[] = [
+    { label: p.netSales, value: profit.net_sales_santim, sign: "" },
+    ...(profit.service_charge_santim ? [{ label: p.serviceCharge, value: profit.service_charge_santim, sign: "+" }] : []),
+    { label: p.costOfSales, value: profit.cost_of_sales_santim, sign: "−" },
+    { label: p.grossProfit, value: profit.gross_profit_santim, sign: "=", strong: true },
+    { label: p.stockLoss, value: profit.stock_loss_santim, sign: "−" },
+    { label: p.expenses, value: profit.expenses_santim, sign: "−" },
+  ];
+  return (
+    <section className="mt-6 grid gap-4 lg:grid-cols-3">
+      <div className="card">
+        <h2 className="mb-3 font-semibold">{p.title}</h2>
+        <dl className="space-y-1.5 text-sm">
+          {rows.map((row) => (
+            <div key={row.label} className={`flex justify-between ${row.strong ? "border-t border-stone-200 pt-1.5 font-semibold dark:border-stone-800" : ""}`}>
+              <dt>{row.sign && <span className="mr-1 inline-block w-3 text-stone-400">{row.sign}</span>}{row.label}</dt>
+              <dd className="tabular-nums">{fmt(row.value)}</dd>
+            </div>
+          ))}
+          <div className="flex justify-between border-t border-stone-200 pt-2 text-lg font-bold dark:border-stone-800">
+            <dt>{p.netProfit}</dt>
+            <dd className={`tabular-nums ${profit.net_profit_santim < 0 ? "text-red-600" : ""}`}>{fmt(profit.net_profit_santim)}</dd>
+          </div>
+          <div className="flex justify-between text-stone-500"><dt>{p.margin}</dt><dd className="tabular-nums">{margin}%</dd></div>
+        </dl>
+        {profit.items_without_recipe > 0 && (
+          <p className="mt-3 rounded-xl bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-900/30 dark:text-amber-100">
+            {format(p.missingRecipes, { n: String(profit.items_without_recipe) })}
+          </p>
+        )}
+      </div>
+      <div className="card lg:col-span-2">
+        <h2 className="mb-3 font-semibold">{p.daily}</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-stone-500">
+              <tr>
+                <th className="py-1 font-medium">{t.reports.day}</th><th className="py-1 text-right font-medium">{p.netSales}</th>
+                <th className="py-1 text-right font-medium">{p.costOfSales}</th><th className="py-1 text-right font-medium">{p.expenses}</th>
+                <th className="py-1 text-right font-medium">{p.netProfit}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profit.daily.map((d) => (
+                <tr key={d.day} className="border-t border-stone-100 dark:border-stone-800">
+                  <td className="py-1">{bothCalendars(d.day, locale)}</td>
+                  <td className="py-1 text-right tabular-nums">{fmt(d.net_sales_santim)}</td>
+                  <td className="py-1 text-right tabular-nums">{fmt(d.cost_santim)}</td>
+                  <td className="py-1 text-right tabular-nums">{fmt(d.expenses_santim)}</td>
+                  <td className={`py-1 text-right font-medium tabular-nums ${d.profit_santim < 0 ? "text-red-600" : ""}`}>{fmt(d.profit_santim)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {profit.expensesByCategory.length > 0 && (
+          <>
+            <h3 className="mb-2 mt-5 text-sm font-semibold">{p.expensesByCategory}</h3>
+            <BarList data={profit.expensesByCategory.map((c) => ({ label: pick(locale, c.name_am, c.name_en), value: c.total_santim }))} format={fmt} />
+          </>
+        )}
+      </div>
+    </section>
   );
 }

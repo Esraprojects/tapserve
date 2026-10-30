@@ -1,7 +1,7 @@
 "use server";
 
 import { birrToSantim } from "@tapserve/core";
-import { deleteCategory, deleteItem, saveCategory, saveItem, setItemAvailability, type Station } from "@tapserve/db";
+import { DomainError, deleteCategory, deleteItem, saveCategory, saveItem, saveRecipe, setItemAvailability, type Station } from "@tapserve/db";
 import { db } from "@/server/db";
 import { appContext } from "@/server/context";
 import { localeOf, runAction, str } from "@/server/actions";
@@ -84,5 +84,23 @@ export async function deleteItemAction(form: FormData) {
   await runAction(`/${locale}/menu`, async () => {
     const { actor } = await appContext(locale);
     await deleteItem(db(), actor, str(form, "id"));
+  });
+}
+
+export async function saveRecipeAction(form: FormData) {
+  const locale = localeOf(form);
+  const variantId = str(form, "variantId");
+  await runAction(`/${locale}/menu/recipe/${variantId}`, async () => {
+    const { actor } = await appContext(locale, "menu.manage");
+    const quantities = form.getAll("quantity");
+    const lines = form.getAll("itemId").flatMap((itemId, i) => {
+      const raw = String(quantities[i] ?? "").trim().replace(",", ".");
+      if (typeof itemId !== "string" || !itemId || !raw) return [];
+      const quantity = Number(raw);
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new DomainError("invalid_quantity");
+      return [{ itemId, quantity }];
+    });
+    await saveRecipe(db(), actor, variantId, lines);
+    return `/${locale}/menu/costing`;
   });
 }

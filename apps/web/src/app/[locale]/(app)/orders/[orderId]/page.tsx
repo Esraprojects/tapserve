@@ -4,6 +4,7 @@ import { format } from "@tapserve/i18n";
 import { currentShift, getOrder, listBills, listOpenOrders, listPaymentMethods, listTables } from "@tapserve/db";
 import { FormError } from "@/components/FormError";
 import { PageHeader } from "@/components/PageHeader";
+import { ReceiptQr } from "@/components/ReceiptQr";
 import { PaymentForm } from "@/components/PaymentForm";
 import { param, resolveLocale, type LocaleParams } from "@/lib/locale";
 import { money, pick } from "@/lib/text";
@@ -168,6 +169,7 @@ export default async function OrderPage({ params, searchParams }: { params: Para
                   </p>
                 )
               )}
+              {bill.status === "paid" && <ReceiptQr token={bill.public_token} locale={locale} t={t} />}
               <div className="flex flex-wrap gap-2 pt-1 text-sm">
                 <a href={`/${locale}/receipt/${bill.id}?w=80`} target="_blank" className="btn-secondary min-h-10 px-3">{t.bill.print} {t.bill.printWide}</a>
                 <a href={`/${locale}/receipt/${bill.id}?w=58`} target="_blank" className="btn-secondary min-h-10 px-3">{t.bill.printNarrow}</a>
