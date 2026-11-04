@@ -1,0 +1,48 @@
+name: Set up database
+
+# Run by hand from the Actions tab. Applies migrations to the live database and, if chosen,
+# loads the demo businesses. Needs two repository secrets (Settings → Secrets and variables → Actions):
+#   DATABASE_ADMIN_URL  Supabase "Session pooler" connection string for the postgres user
+#   APP_DB_PASSWORD     a long random password; the app's tapserve_app role gets this password
+on:
+  workflow_dispatch:
+    inputs:
+      seed_demo:
+        description: Load the demo café and hotel (demo@tapserve.et)
+        type: boolean
+        default: true
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_ADMIN_URL: ${{ secrets.DATABASE_ADMIN_URL }}
+      APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check secrets
+        run: |
+          if [ -z "$DATABASE_ADMIN_URL" ] || [ -z "$APP_DB_PASSWORD" ]; then
+            echo "::error::Add the DATABASE_ADMIN_URL and APP_DB_PASSWORD repository secrets first."
+            exit 1
+          fi
+      - run: pnpm db:migrate
+      - name: Load demo data
+        if: inputs.seed_demo
+        run: |
+          # Same server as the admin URL, signed in as the restricted app role.
+          # On Supabase's pooler the user name carries the project ref (postgres.<ref> → tapserve_app.<ref>).
+          DATABASE_URL=$(node -e '
+            const u = new URL(process.env.DATABASE_ADMIN_URL);
+            u.username = u.username.replace(/^postgres/, "tapserve_app");
+            u.password = encodeURIComponent(process.env.APP_DB_PASSWORD);
+            console.log(u.toString());
+          ')
+          echo "::add-mask::$DATABASE_URL"
+          DATABASE_URL="$DATABASE_URL" pnpm db:seed
