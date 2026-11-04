@@ -18,9 +18,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ loca
   const filter = paymentFilter(Object.fromEntries(new URL(request.url).searchParams), branches);
   const rows = await listPayments(db(), actor, filter);
   const lines: (string | number)[][] = [
-    ["Time", "Branch", "Receipt no.", "Method", "Transaction no.", "Amount (ETB)", "Received by", "Check", "Checked by"],
+    ["Time", "Branch", "Receipt / booking", "Method", "Transaction no.", "Amount (ETB)", "Received by", "Check", "Checked by"],
     ...rows.map((p) => [
-      time.format(p.created_at), p.branch_name, p.receipt_no, p.method_en, p.reference, birr(p.amount_santim), p.received_by,
+      time.format(p.created_at), p.branch_name, p.receipt_no ?? `Booking ${p.booking_no}`, p.method_en, p.reference, birr(p.amount_santim), p.received_by,
       p.check_status ?? "unchecked", p.checked_by ?? "",
     ]),
   ];

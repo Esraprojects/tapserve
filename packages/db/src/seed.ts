@@ -2,7 +2,8 @@
  * Demo data for local testing: one owner with a demo café and a demo hotel-restaurant,
  * an Ethiopian menu, tables, staff, and a week of sample sales for the dashboard.
  * Run after migrations: pnpm db:seed (uses DATABASE_URL, the RLS-restricted app role).
- * With DATABASE_ADMIN_URL also set, sample stock movements are back-dated to match the sample sales.
+ * With DATABASE_ADMIN_URL also set, sample stock movements are back-dated to match the sample sales,
+ * and the demo hotel gets a week of past stays (occupancy, ADR and RevPAR need history).
  */
 import { birrToSantim } from "@tapserve/core";
 import {
@@ -11,6 +12,8 @@ import {
   addStaffMember, setItemStatus, signUpWithEmail, withTenant, type Sql,
   listUnits, saveInventoryItem, setOpeningStock, saveRecipe, recordPurchase, saveSupplier, listExpenseCategories,
   recordExpense, recordWaste, setOwnPin, listPayments, setPaymentCheck, listStaff,
+  saveRoomType, addRoomRange, addRateSeason, setUsdRate, listRooms, createBooking, runNightAudit, recordFolioPayment,
+  folioBalance, addFolioCharge, setRoomStatus, createHousekeepingTask, type BookingSource,
 } from "./index";
 
 const url = process.env.DATABASE_URL;
@@ -177,6 +180,119 @@ async function sampleSales(sql: Sql, owner: Actor, waiterId: string) {
   await closeShift(sql, owner, shiftId, summary?.expectedCash ?? 0, "Seed shift");
 }
 
+type Stay = [arrival: number, nights: number, room: string, guest: string, nationality: string, source: BookingSource];
+
+/**
+ * The demo hotel: room types with resident and foreigner rates, 12 rooms, a week of stays closed
+ * by the night audit, guests in house today, arrivals, future bookings and housekeeping work.
+ */
+async function sampleHotel(sql: Sql, owner: Actor) {
+  const [branch] = await withTenant(sql, owner, (tx) => tx<{ id: string }[]>`select id from branches limit 1`);
+  const branchId = branch!.id;
+  const birr = (v: string) => birrToSantim(v);
+  const standard = await saveRoomType(sql, owner, { nameAm: "መደበኛ", nameEn: "Standard", capacity: 2,
+    localRateSantim: birr("2300"), foreignRateSantim: birr("4600"), weekendLocalRateSantim: birr("2600"), weekendForeignRateSantim: null });
+  const deluxe = await saveRoomType(sql, owner, { nameAm: "ዴሉክስ", nameEn: "Deluxe", capacity: 2,
+    localRateSantim: birr("3500"), foreignRateSantim: birr("6900"), weekendLocalRateSantim: null, weekendForeignRateSantim: null });
+  const suite = await saveRoomType(sql, owner, { nameAm: "ስዊት", nameEn: "Suite", capacity: 4,
+    localRateSantim: birr("5800"), foreignRateSantim: birr("11500"), weekendLocalRateSantim: null, weekendForeignRateSantim: null });
+  await addRoomRange(sql, owner, { branchId, roomTypeId: standard, from: 101, to: 106, floor: "1" });
+  await addRoomRange(sql, owner, { branchId, roomTypeId: deluxe, from: 201, to: 204, floor: "2" });
+  await addRoomRange(sql, owner, { branchId, roomTypeId: suite, from: 301, to: 302, floor: "3" });
+  const nextJanuary = `${Number(daysAgo(0).slice(0, 4)) + (daysAgo(0).slice(5, 7) === "01" ? 0 : 1)}`;
+  for (const [typeId, local, foreign] of [[standard, "3200", "6000"], [deluxe, "4500", "8500"], [suite, "7500", "14000"]] as const) {
+    await addRateSeason(sql, owner, { roomTypeId: typeId, name: "Timket", startsOn: `${nextJanuary}-01-17`, endsOn: `${nextJanuary}-01-20`,
+      localRateSantim: birr(local), foreignRateSantim: birr(foreign) });
+  }
+  await setUsdRate(sql, owner, birr("155"));
+  const rooms = new Map((await listRooms(sql, owner, branchId)).map((r) => [r.number, r]));
+  const typeOf = (room: string) => rooms.get(room)!.room_type_id;
+  await openShift(sql, owner, branchId, 100_000);
+
+  const guest = (name: string, nationality: string, i: number) => ({
+    fullName: name, nationality, phone: nationality === "ET" ? `09${String(12000000 + i * 7919).slice(0, 8)}` : "",
+    idType: nationality === "ET" ? (i % 2 ? "fayda" as const : "kebele" as const) : "passport" as const,
+    idNumber: nationality === "ET" ? `${4000 + i * 37} ${1000 + i * 91} ${2000 + i * 13}` : `P${7000000 + i * 4111}`,
+  });
+  const book = (stay: Stay, i: number, offset = 0) => createBooking(sql, owner, {
+    branchId, guest: guest(stay[3], stay[4], i), roomTypeId: typeOf(stay[2]), roomId: rooms.get(stay[2])!.id,
+    arrival: daysAgo(-(stay[0] + offset)), departure: daysAgo(-(stay[0] + stay[1] + offset)), adults: 1 + (i % 2), source: stay[5],
+  });
+
+  const adminUrl = process.env.DATABASE_ADMIN_URL;
+  if (adminUrl) {
+    // Past and current stays are booked 30 days ahead, then moved back by the admin connection
+    // (the app refuses arrivals in the past), checked in, and closed night by night by the audit.
+    const history: Stay[] = [
+      [-7, 3, "101", "Abebe Kebede", "ET", "direct"],
+      [-7, 2, "203", "Meseret Alemu", "ET", "phone"],
+      [-6, 2, "201", "Emily Carter", "US", "booking_com"],
+      [-5, 4, "102", "Yonas Tadesse", "ET", "phone"],
+      [-4, 2, "301", "James Wilson", "GB", "travel_agent"],
+      [-4, 3, "105", "Wanjiru Kamau", "KE", "direct"],
+      [-3, 5, "103", "Hirut Bekele", "ET", "direct"],
+      [-2, 3, "202", "Lukas Becker", "DE", "booking_com"],
+      [-2, 4, "302", "Dawit Haile", "ET", "direct"],
+      [-1, 1, "104", "Samuel Girma", "ET", "walk_in"],
+    ];
+    const ids: string[] = [];
+    for (const [i, stay] of history.entries()) ids.push(await book(stay, i, 30));
+    const noShow = await book([-1, 1, "106", "Kidist Assefa", "ET", "phone"], 40, 30);
+    const admin = createSql(adminUrl, { max: 1 });
+    try {
+      await admin`update bookings set arrival = arrival - 30, departure = departure - 30 where id in ${admin(ids.concat(noShow))}`;
+      await admin`update bookings set status = 'checked_in', checked_in_at = arrival + time '14:00' where id in ${admin(ids)}`;
+      for (let day = 7; day >= 1; day--) {
+        const date = daysAgo(day);
+        // Guests leaving that morning settle their folio first.
+        for (const [i, stay] of history.entries()) {
+          if (stay[0] + stay[1] !== -day) continue;
+          const id = ids[i]!;
+          const due = await withTenant(sql, owner, (tx) => folioBalance(tx, id));
+          const method = stay[4] === "ET" ? (i % 3 ? "telebirr" : "cash") : "pos_card";
+          if (due > 0) await recordFolioPayment(sql, owner, id, { methodCode: method, amountSantim: due, reference: method === "telebirr" ? `TB${date.replaceAll("-", "")}${i}` : "" });
+          await admin`update bookings set status = 'checked_out', checked_out_at = ${date}::date + time '10:30' where id = ${id}`;
+          await admin`update payments set created_at = ${date}::date + time '10:20' where booking_id = ${id}`;
+        }
+        await runNightAudit(sql, owner, branchId, date);
+        await admin`update night_audits set ran_at = ${date}::date + time '23:15' where branch_id = ${branchId} and business_date = ${date}`;
+      }
+      await admin`update folio_charges set created_at = night_date + time '23:15' where kind = 'room' and booking_id in ${admin(ids)}`;
+    } finally {
+      await admin.end();
+    }
+    // A guest staying now puts dinner on the room, pays part in advance, and uses the laundry.
+    const hirut = ids[6]!;
+    const menu = await getMenu(sql, owner, branchId);
+    const variants = menu.categories.flatMap((c) => c.items.flatMap((i) => i.variants.map((v) => v.id)));
+    const orderId = await createOrder(sql, owner, { branchId, type: "dine_in", tableId: (await withTenant(sql, owner, (tx) => tx<{ id: string }[]>`select id from dining_tables order by name desc limit 1`))[0]!.id,
+      items: [{ variantId: variants[0]!, quantity: 1 }, { variantId: variants[13]!, quantity: 2 }] });
+    const billId = await createBill(sql, owner, orderId);
+    const [bill] = await withTenant(sql, owner, (tx) => tx<{ total: number }[]>`select total_santim::int as total from bills where id = ${billId}`);
+    await recordPayments(sql, owner, billId, [{ methodCode: "room", amountSantim: bill!.total, bookingId: hirut }]);
+    await recordFolioPayment(sql, owner, hirut, { methodCode: "cbe_birr", amountSantim: birr("5000"), reference: "FT26303CBE88" });
+    await addFolioCharge(sql, owner, ids[8]!, { kind: "extra", description: "Laundry", amountSantim: birr("350") });
+  }
+
+  // Arriving today, and booked for later.
+  const later: Stay[] = [
+    [0, 2, "106", "Bethlehem Tesfaye", "ET", "phone"],
+    [0, 3, "204", "Claire Dubois", "FR", "booking_com"],
+    [2, 3, "101", "Mulugeta Assefa", "ET", "direct"],
+    [5, 2, "201", "Anna Rossi", "IT", "expedia"],
+    [10, 2, "301", "Ethiopian Airlines crew", "ET", "travel_agent"],
+  ];
+  for (const [i, stay] of later.entries()) await book(stay, 20 + i);
+  await createBooking(sql, owner, { branchId, guest: guest("Tewodros Lemma", "ET", 30), roomTypeId: standard,
+    arrival: daysAgo(0), departure: daysAgo(-1), adults: 2, source: "phone",
+    deposit: { methodCode: "telebirr", amountSantim: birr("1000"), reference: "TB55120931" } });
+
+  // Housekeeping: most empty rooms are ready, a few still need work, one is under repair.
+  for (const number of ["101", "201", "203", "301", "106", "204"]) await setRoomStatus(sql, owner, rooms.get(number)!.id, "clean");
+  await setRoomStatus(sql, owner, rooms.get("105")!.id, "out_of_order", "Shower repair");
+  return { branchId, rooms };
+}
+
 /**
  * The stock ledger is append-only for the app, so back-dating the sample movements to their
  * orders' dates needs the admin connection. Skipped when DATABASE_ADMIN_URL is not set.
@@ -235,11 +351,20 @@ try {
       for (const p of payments.filter((x) => x.method_kind === "mobile_money").slice(0, 6)) {
         await setPaymentCheck(sql, owner, p.id, "confirmed");
       }
+    } else {
+      // Reception and housekeeping for the hotel: PINs 3691 and 7413.
+      const receptionId = await addStaffMember(sql, owner, { phone: "0911000004", fullName: "Meron (reception)", roleName: "Receptionist" });
+      const housekeeperId = await addStaffMember(sql, owner, { phone: "0911000005", fullName: "Tigist (housekeeping)", roleName: "Housekeeping" });
+      await setOwnPin(sql, { tenantId, userId: receptionId }, "3691");
+      await setOwnPin(sql, { tenantId, userId: housekeeperId }, "7413");
+      const { branchId, rooms } = await sampleHotel(sql, owner);
+      await createHousekeepingTask(sql, owner, { branchId, roomId: rooms.get("102")!.id, kind: "clean", assignedTo: housekeeperId, note: "Deep clean" });
+      await createHousekeepingTask(sql, owner, { branchId, roomId: rooms.get("105")!.id, kind: "repair", assignedTo: null, note: "Shower" });
     }
   }
   await backdateSampleStock(cafe);
   console.log(`Seeded. Log in with ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
-  console.log("Shared-tablet PINs (Switch user): Selam 2580, Dawit 4826");
+  console.log("Shared-tablet PINs (Switch user): café Selam 2580, Dawit 4826; hotel Meron 3691, Tigist 7413");
   console.log("Staff phone logins (code printed in the server log): 0911000001 waiter, 0911000002 cashier, 0911000003 kitchen");
 } finally {
   await sql.end();

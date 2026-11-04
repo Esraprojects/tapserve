@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { format } from "@tapserve/i18n";
-import { currentShift, getOrder, listBills, listOpenOrders, listPaymentMethods, listTables } from "@tapserve/db";
+import { currentShift, getOrder, hasRooms, listBills, listInHouseGuests, listOpenOrders, listPaymentMethods, listTables } from "@tapserve/db";
 import { FormError } from "@/components/FormError";
 import { PageHeader } from "@/components/PageHeader";
 import { ReceiptQr } from "@/components/ReceiptQr";
@@ -30,15 +30,16 @@ export default async function OrderPage({ params, searchParams }: { params: Para
   const { locale, t } = await resolveLocale(params as unknown as Promise<{ locale: string }>);
   const { orderId } = await params;
   const search = await searchParams;
-  const { actor, branchId, can } = await appContext(locale, "order.create");
+  const { actor, branchId, can, access } = await appContext(locale, "order.create");
   const order = await getOrder(db(), actor, orderId);
   if (!order) notFound();
-  const [bills, methods, shift, tables, openOrders] = await Promise.all([
+  const [bills, methods, shift, tables, openOrders, guests] = await Promise.all([
     listBills(db(), actor, orderId),
     listPaymentMethods(db(), actor),
     currentShift(db(), actor, branchId),
     listTables(db(), actor, branchId),
     listOpenOrders(db(), actor, branchId),
+    hasRooms(access.businessType) ? listInHouseGuests(db(), actor) : Promise.resolve([]),
   ]);
   const open = order.status === "open";
   const live = order.items.filter((i) => i.status !== "voided");
@@ -161,6 +162,7 @@ export default async function OrderPage({ params, searchParams }: { params: Para
                     billId={bill.id}
                     dueSantim={bill.total_santim - bill.paid_santim}
                     methods={methods.map((m) => ({ code: m.code, name: pick(locale, m.name_am, m.name_en), kind: m.kind }))}
+                    guests={guests.map((g) => ({ bookingId: g.booking_id, label: `${g.room_number} · ${g.guest_name}` }))}
                     t={t.bill}
                   />
                 ) : (

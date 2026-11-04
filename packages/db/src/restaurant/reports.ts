@@ -126,6 +126,8 @@ export interface ProfitReport {
   /** Sales without tax and service charge, from paid bills. */
   net_sales_santim: number;
   service_charge_santim: number;
+  /** Hotel rooms, extras and discounts on guest folios, before tax (zero for restaurants and cafés). */
+  room_revenue_santim: number;
   /** Ingredients used by sales (net of items voided before cooking). */
   cost_of_sales_santim: number;
   /** Spoiled or spilled stock, plus stock-count shortages (gains reduce it). */
@@ -140,7 +142,7 @@ export interface ProfitReport {
 }
 
 /**
- * Profit = net sales + service charge - cost of sales - stock losses - expenses.
+ * Profit = net sales + service charge + room revenue - cost of sales - stock losses - expenses.
  * Costs come from the stock ledger, so they are only as complete as the recipes and purchases entered.
  */
 export async function profitReport(sql: Sql, actor: Actor, range: DateRange, branchId: string | null): Promise<ProfitReport> {
@@ -149,12 +151,19 @@ export async function profitReport(sql: Sql, actor: Actor, range: DateRange, bra
     const inRange = (col: string) =>
       tx`(${tx.unsafe(col)} at time zone 'Africa/Addis_Ababa')::date between ${range.from}::date and ${range.to}::date`;
     const branch = (col: string) => tx`(${branchId}::uuid is null or ${tx.unsafe(col)} = ${branchId}::uuid)`;
-    const daily = await tx<{ day: string; net: number; service: number; cost: number; loss: number; expenses: number }[]>`
+    const daily = await tx<{ day: string; net: number; service: number; room: number; cost: number; loss: number; expenses: number }[]>`
       with days as (select d::date as d from generate_series(${range.from}::date, ${range.to}::date, interval '1 day') d),
       sales as (
         select (b.paid_at at time zone 'Africa/Addis_Ababa')::date as d, sum(b.subtotal_santim) as net,
                sum(b.service_charge_santim) as service
         from bills b where b.status = 'paid' and ${inRange("b.paid_at")} and ${branch("b.branch_id")} group by 1),
+      rooms as (
+        select coalesce(c.night_date, (c.created_at at time zone 'Africa/Addis_Ababa')::date) as d,
+               sum(c.amount_santim - c.tax_santim) as room
+        from folio_charges c join bookings bk on bk.id = c.booking_id
+        where c.kind in ('room', 'extra', 'discount') and c.voided_at is null and ${branch("bk.branch_id")}
+          and coalesce(c.night_date, (c.created_at at time zone 'Africa/Addis_Ababa')::date) between ${range.from}::date and ${range.to}::date
+        group by 1),
       stock as (
         select (m.created_at at time zone 'Africa/Addis_Ababa')::date as d,
                -sum(m.value_santim) filter (where m.kind in ('sale', 'void_return')) as cost,
@@ -166,8 +175,9 @@ export async function profitReport(sql: Sql, actor: Actor, range: DateRange, bra
         where e.voided_at is null and e.spent_on between ${range.from}::date and ${range.to}::date and ${branch("e.branch_id")}
         group by 1)
       select to_char(days.d, 'YYYY-MM-DD') as day, coalesce(s.net, 0)::int as net, coalesce(s.service, 0)::int as service,
+             coalesce(r.room, 0)::int as room,
              coalesce(st.cost, 0)::int as cost, coalesce(st.loss, 0)::int as loss, coalesce(sp.expenses, 0)::int as expenses
-      from days left join sales s on s.d = days.d left join stock st on st.d = days.d left join spent sp on sp.d = days.d
+      from days left join sales s on s.d = days.d left join rooms r on r.d = days.d left join stock st on st.d = days.d left join spent sp on sp.d = days.d
       order by days.d`;
     const expensesByCategory = await tx<ProfitReport["expensesByCategory"]>`
       select c.name_am, c.name_en, sum(e.amount_santim)::int as total_santim
@@ -180,16 +190,18 @@ export async function profitReport(sql: Sql, actor: Actor, range: DateRange, bra
       where b.status = 'paid' and ${inRange("b.paid_at")} and ${branch("b.branch_id")}
         and oi.variant_id is not null
         and not exists (select 1 from recipe_lines rl where rl.variant_id = oi.variant_id)`;
-    const sum = (k: "net" | "service" | "cost" | "loss" | "expenses") => daily.reduce((s, d) => s + d[k], 0);
+    const sum = (k: "net" | "service" | "room" | "cost" | "loss" | "expenses") => daily.reduce((s, d) => s + d[k], 0);
     const net = sum("net");
     const service = sum("service");
+    const room = sum("room");
     const cost = sum("cost");
     const loss = sum("loss");
     const expenses = sum("expenses");
-    const gross = net + service - cost;
+    const gross = net + service + room - cost;
     return {
       net_sales_santim: net,
       service_charge_santim: service,
+      room_revenue_santim: room,
       cost_of_sales_santim: cost,
       stock_loss_santim: loss,
       expenses_santim: expenses,
@@ -199,10 +211,10 @@ export async function profitReport(sql: Sql, actor: Actor, range: DateRange, bra
       expensesByCategory,
       daily: daily.map((d) => ({
         day: d.day,
-        net_sales_santim: d.net,
+        net_sales_santim: d.net + d.room,
         cost_santim: d.cost + d.loss,
         expenses_santim: d.expenses,
-        profit_santim: d.net + d.service - d.cost - d.loss - d.expenses,
+        profit_santim: d.net + d.service + d.room - d.cost - d.loss - d.expenses,
       })),
     };
   });

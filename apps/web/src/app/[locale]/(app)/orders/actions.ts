@@ -58,12 +58,13 @@ export async function recordPaymentsAction(form: FormData) {
     const methods = form.getAll("method").map(String);
     const amounts = form.getAll("amount").map(String);
     const references = form.getAll("reference").map(String);
+    const bookingIds = form.getAll("bookingId").map(String);
     const payments = methods
-      .map((methodCode, i) => ({ methodCode, amount: amounts[i]?.trim() ?? "", reference: references[i] ?? "" }))
+      .map((methodCode, i) => ({ methodCode, amount: amounts[i]?.trim() ?? "", reference: references[i] ?? "", bookingId: bookingIds[i] || undefined }))
       .filter((p) => p.methodCode && p.amount)
       .map((p) => {
         try {
-          return { methodCode: p.methodCode, amountSantim: birrToSantim(p.amount), reference: p.reference };
+          return { methodCode: p.methodCode, amountSantim: birrToSantim(p.amount), reference: p.reference, bookingId: p.bookingId };
         } catch {
           throw new Error("invalid_amount");
         }
